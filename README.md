@@ -2,8 +2,8 @@
 
 # MK64 Portable
 
-A native PlayStation Portable port of Mario Kart 64, built on the
-[n64decomp/mk64](https://github.com/n64decomp/mk64) decompilation. The game's
+A native PSP port of Mario Kart 64 running at full speed (30 FPS). 
+Built on the [n64decomp/mk64](https://github.com/n64decomp/mk64) decompilation. The game's
 C code runs directly on the PSP's MIPS CPU; the N64-specific layers (libultra,
 the RSP graphics microcode, the RSP audio microcode) are replaced by a port
 layer that drives the PSP's Graphics Engine and audio hardware.
@@ -12,12 +12,15 @@ layer that drives the PSP's Graphics Engine and audio hardware.
 (USA) ROM that you provide and builds the game data from it. This is an
 unofficial fan project, not affiliated with or endorsed by Nintendo.
 
+This was created using Claude Fable5. If you do not want AI code on your PSP, this is 
+not a project for you.
+
 <p align="center"><img src="icon/MK64-PIC1.png" alt="" width="480"></p>
 
 ## Features
 
 - Runs at a locked 30 fps on every PSP model, including the PSP-1000 (32 MB)
-- All cups, all courses, Grand Prix, Time Trial, Versus and Battle
+- All cups and courses: Grand Prix, Time Trial and Versus
 - Widescreen 16:9 presentation on the PSP's 480x272 screen
 - Music, sound effects and the announcer, mixed on the PSP
 - Hardware-accelerated rendering: the N64 display lists are translated to the
@@ -56,7 +59,7 @@ cp /path/to/your/rom.z64 baserom.us.z64
 gmake -C tools mio0 n64graphics displaylist_packer n64cksum tkmk00 extract_data_for_mio
 python3 extract_assets.py us
 cmake -S tools/torch -B tools/torch/cmake-build-release -G Ninja \
-      -DCMAKE_PROJECT_INCLUDE=tools/psp/torch_fmt_fix.cmake && cmake --build tools/torch/cmake-build-release
+      -DCMAKE_PROJECT_INCLUDE="$PWD/tools/psp/torch_fmt_fix.cmake" && cmake --build tools/torch/cmake-build-release
 tools/torch/cmake-build-release/torch code   baserom.us.z64
 tools/torch/cmake-build-release/torch header baserom.us.z64
 
