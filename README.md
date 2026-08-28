@@ -112,6 +112,13 @@ regenerates the recipes when the set of assets changes; a build with
 `EXTRA_CFLAGS=-DPORT_ASSETS_VERIFY` compares an extraction symbol by symbol
 against the build-time archive.
 
+## License
+
+The port layer, its tooling and the artwork are released under the MIT License
+(see `LICENSE`). The decompiled game code inherited from n64decomp/mk64 is
+Nintendo's copyrighted work and carries no license; it is distributed for
+preservation and interoperability, and no game assets are included.
+
 ## Acknowledgements
 
 - [n64decomp/mk64](https://github.com/n64decomp/mk64) — the decompilation this port is built on
