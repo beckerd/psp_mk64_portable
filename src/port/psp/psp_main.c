@@ -232,8 +232,19 @@ void port_set_save_dir(const char* argv0) {
         memcpy(sEbootDir, argv0, slash + 1 - argv0);
         sEbootDir[slash + 1 - argv0] = 0;
     }
-    snprintf(sSaveDir, sizeof(sSaveDir), "%sdata/", sEbootDir);
-    sceIoMkdir(sSaveDir, 0777); /* harmless if it exists */
+    {
+        char dir[200];
+        SceUID d;
+        snprintf(dir, sizeof(dir), "%sdata", sEbootDir); /* no trailing slash: the PSP's FAT driver rejects it */
+        sceIoMkdir(dir, 0777);                            /* harmless if it exists */
+        d = sceIoDopen(dir);
+        if (d >= 0) {
+            sceIoDclose(d);
+            snprintf(sSaveDir, sizeof(sSaveDir), "%s/", dir);
+        } else {
+            snprintf(sSaveDir, sizeof(sSaveDir), "%s", sEbootDir); /* could not create data/: write beside the EBOOT */
+        }
+    }
 }
 void port_fs_init(void) {
     /* data/ is created by port_set_save_dir(); nothing else to prepare. */
