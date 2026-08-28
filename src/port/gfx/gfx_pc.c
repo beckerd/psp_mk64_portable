@@ -722,6 +722,7 @@ extern void texman_bind_tex(unsigned int num);
 extern void gfx_scegu_sync_pending(void);
 static void gfx_flush(void);
 static uint32_t gfx_frame_counter;
+int gPortShowFps = 0; /* FPS overlay; toggled by holding SELECT (controller_psp.c) */
 
 /* Forget every cached texture and recycle the VRAM arena.  The GE is drained
  * first: the display list is only executed at the end of the frame and may
@@ -3250,7 +3251,7 @@ void gfx_run(Gfx *commands) {
     {
         extern void port_gfx_overlay(void);
 #ifndef PORT_NO_FPS
-        port_gfx_overlay(); // FPS counter etc., drawn on top of the frame (release builds: -DPORT_NO_FPS)
+        if (gPortShowFps) port_gfx_overlay(); // FPS counter, off by default; hold SELECT 3 s to toggle
 #endif
     }
     {

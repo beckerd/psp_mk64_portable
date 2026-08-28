@@ -322,9 +322,9 @@ $(EBOOT): $(PRX) $(BUILD_DIR)/PARAM.SFO $(DATA_PSAR) $(wildcard icon/MK64-ICON0.
 #     the disc-id string in the PVD application area).
 #   * PARAM.SFO from tools/psp/make_sfo.py (sorted keys + DISC_NUMBER/TOTAL);
 #     UMD_DATA.BIN is the exact 48-byte layout.
-# Release builds carry no FPS overlay: `gmake -f Makefile.psp release` does a
-# clean rebuild with -DPORT_NO_FPS, masters release/MK64.iso and the
-# memory-stick release/EBOOT.PBP, then rebuilds the normal dev EBOOT.
+# The FPS overlay is off by default and toggled by holding SELECT for 3 s, so
+# release builds keep it; `gmake -f Makefile.psp release` does a clean rebuild
+# into release/, then rebuilds the normal dev EBOOT.
 ISO_ROOT    := $(BUILD_DIR)/iso_root
 RELEASE_DIR := ../release
 DISC_ID     := MKPS00001
@@ -352,14 +352,14 @@ endef
 iso: all $(ASSETS_BIN)
 	$(call BUILD_ISO,../testing/mk64.iso)
 
-# release: clean no-FPS build -> release/EBOOT.PBP (+ README.txt, MD5SUMS.txt),
+# release: clean build -> release/EBOOT.PBP (+ README.txt, MD5SUMS.txt),
 # then restore the normal dev build in build/ and ../testing.  The EBOOT
 # contains no game data: players put their own Mario Kart 64 (USA) .z64 ROM in
 # the same folder and the first start builds assets.bin from it.  Nothing else
 # (no assets.bin, no ISO) ships.
 release:
 	$(MAKE) -f Makefile.psp clean
-	$(MAKE) -f Makefile.psp all EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DPORT_NO_FPS"
+	$(MAKE) -f Makefile.psp all EXTRA_CFLAGS="$(EXTRA_CFLAGS)"
 	rm -rf $(RELEASE_DIR)
 	mkdir -p $(RELEASE_DIR)
 	cp $(EBOOT) $(RELEASE_DIR)/EBOOT.PBP

@@ -13,6 +13,7 @@
  */
 #include <ultra64.h>
 #include <pspctrl.h>
+#include <pspkernel.h>
 #include "port.h"
 
 #define STICK_DEADZONE 20
@@ -46,6 +47,18 @@ void controller_psp_read(OSContPad* pad) {
     u16 b = 0;
 
     sceCtrlPeekBufferPositive(&d, 1);
+    /* Hold SELECT for 3 seconds to toggle the FPS counter (off by default). */
+    {
+        extern int gPortShowFps;
+        static u32 selectSince; static int selectArmed = 1;
+        u32 now = sceKernelGetSystemTimeLow();
+        if (d.Buttons & PSP_CTRL_SELECT) {
+            if (selectSince == 0) selectSince = now ? now : 1;
+            else if (selectArmed && now - selectSince >= 3000000u) { gPortShowFps = !gPortShowFps; selectArmed = 0; }
+        } else {
+            selectSince = 0; selectArmed = 1;
+        }
+    }
 
     if (d.Buttons & PSP_CTRL_CROSS) {
         b |= A_BUTTON;
