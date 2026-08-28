@@ -326,7 +326,7 @@ $(EBOOT): $(PRX) $(BUILD_DIR)/PARAM.SFO $(DATA_PSAR) $(wildcard icon/MK64-ICON0.
 # release builds keep it; `gmake -f Makefile.psp release` does a clean rebuild
 # into release/, then rebuilds the normal dev EBOOT.
 ISO_ROOT    := $(BUILD_DIR)/iso_root
-RELEASE_DIR := ../release
+RELEASE_DIR := release
 DISC_ID     := MKPS00001
 DISC_ID_DASH:= MKPS-00001
 ISO_VOLID   := MK64PORTABLE
@@ -348,12 +348,11 @@ define BUILD_ISO
 	@ls -lh $(1)
 endef
 
-# iso: a test disc of the CURRENT build (whatever flags it has) in ../testing
+# iso: a test disc of the CURRENT build (whatever flags it has) in build/psp
 iso: all $(ASSETS_BIN)
-	$(call BUILD_ISO,../testing/mk64.iso)
+	$(call BUILD_ISO,$(BUILD_DIR)/mk64.iso)
 
-# release: clean build -> release/EBOOT.PBP (+ README.txt, MD5SUMS.txt),
-# then restore the normal dev build in build/ and ../testing.  The EBOOT
+# release: clean build -> release/EBOOT.PBP (+ README.txt, MD5SUMS.txt).  The EBOOT
 # contains no game data: players put their own Mario Kart 64 (USA) .z64 ROM in
 # the same folder and the first start builds assets.bin from it.  Nothing else
 # (no assets.bin, no ISO) ships.
@@ -365,9 +364,6 @@ release:
 	cp $(EBOOT) $(RELEASE_DIR)/EBOOT.PBP
 	printf 'MK64 Portable\n\nAn unofficial fan port for the PSP. It contains no game data: it needs a ROM\nof Mario Kart 64 (USA) that you own. Not affiliated with or endorsed by Nintendo.\n\n1. Copy this folder to ms0:/PSP/GAME/MK64Portable/ (so it holds EBOOT.PBP).\n2. Put your Mario Kart 64 (USA) ROM (.z64, .n64 or .v64) in the same folder.\n3. Start it from the XMB. The first start reads the ROM and builds the game\n   data (about 13 MB) into a data/ folder next to the EBOOT; later starts skip this.\n   Your save is kept there too.\n' > $(RELEASE_DIR)/README.txt
 	(cd $(RELEASE_DIR) && (md5 EBOOT.PBP || md5sum EBOOT.PBP) > MD5SUMS.txt)
-	$(MAKE) -f Makefile.psp clean
-	$(MAKE) -f Makefile.psp all EXTRA_CFLAGS="$(EXTRA_CFLAGS)"
-	cp $(EBOOT) ../testing/EBOOT.PBP
 	@ls -lh $(RELEASE_DIR)
 
 .PHONY: iso release
