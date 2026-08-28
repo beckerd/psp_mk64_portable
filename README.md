@@ -20,7 +20,7 @@ not a project for you.
 ## Features
 
 - Runs at a locked 30 fps on every PSP model, including the PSP-1000 (32 MB)
-- All cups and courses: Grand Prix, Time Trial and Versus
+- All cups and courses: Grand Prix and Time Trial
 - Widescreen 16:9 presentation on the PSP's 480x272 screen
 - Music, sound effects and the announcer, mixed on the PSP
 - Hardware-accelerated rendering: the N64 display lists are translated to the
