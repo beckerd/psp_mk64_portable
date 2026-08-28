@@ -2,8 +2,8 @@
 
 # MK64 Portable
 
-A native PSP port of Mario Kart 64 running at full speed (30 FPS). 
-Built on the [n64decomp/mk64](https://github.com/n64decomp/mk64) decompilation. The game's
+A native PSP port of Mario Kart 64 running at full speed (30 FPS), built on the
+[n64decomp/mk64](https://github.com/n64decomp/mk64) decompilation. The game's
 C code runs directly on the PSP's MIPS CPU; the N64-specific layers (libultra,
 the RSP graphics microcode, the RSP audio microcode) are replaced by a port
 layer that drives the PSP's Graphics Engine and audio hardware.
@@ -12,7 +12,7 @@ layer that drives the PSP's Graphics Engine and audio hardware.
 (USA) ROM that you provide and builds the game data from it. This is an
 unofficial fan project, not affiliated with or endorsed by Nintendo.
 
-This was created using Claude Fable5. If you do not want AI code on your PSP, this is 
+This was created using Claude Fable 5. If you do not want AI code on your PSP, this is
 not a project for you.
 
 <p align="center"><img src="icon/MK64-PIC1.png" alt="" width="480"></p>
@@ -25,7 +25,7 @@ not a project for you.
 - Music, sound effects and the announcer, mixed on the PSP
 - Hardware-accelerated rendering: the N64 display lists are translated to the
   PSP's Graphics Engine, which does the vertex transform and rasterisation
-- Saves (Grand Prix progress, ghosts) kept on the Memory Stick
+- Saves (Grand Prix progress, ghosts) kept in the game's `data/` folder
 
 ## Installing
 
@@ -43,7 +43,21 @@ the log — goes into a `data/` folder next to the EBOOT. Later starts skip the
 extraction. If the ROM is missing, is another game, or is not the USA version,
 the port says so and returns to the XMB; nothing is cached from a bad ROM.
 
-Only the USA (NTSC) version is supported.
+Only the USA (NTSC) version is supported. Deleting the `data/` folder forces a
+fresh extraction on the next start (you lose the save in it).
+
+## Controls
+
+| PSP | Game |
+| --- | --- |
+| Analog nub or D-pad | Steer (the D-pad gives full deflection) |
+| Cross | A — accelerate |
+| Square | B — brake / reverse |
+| Circle or L | Z — use item |
+| R | R — hop / drift |
+| Triangle | C-up — look behind |
+| Start | Start / pause |
+| Hold Select for 3 seconds | Show or hide the FPS counter |
 
 ## Building from source
 
@@ -67,7 +81,7 @@ tools/torch/cmake-build-release/torch header baserom.us.z64
 # the PSP build
 export PATH="$HOME/pspdev/bin:$PATH"
 gmake -f Makefile.psp -j8            # -> build/psp/EBOOT.PBP
-gmake -f Makefile.psp release        # clean build without the FPS counter -> release/EBOOT.PBP
+gmake -f Makefile.psp release        # clean build with a player README -> release/EBOOT.PBP
 ```
 
 Run the result in PPSSPP or on a PSP exactly like a release: put a ROM next to
