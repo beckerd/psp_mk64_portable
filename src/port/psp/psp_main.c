@@ -235,28 +235,8 @@ void port_set_save_dir(const char* argv0) {
     snprintf(sSaveDir, sizeof(sSaveDir), "%sdata/", sEbootDir);
     sceIoMkdir(sSaveDir, 0777); /* harmless if it exists */
 }
-static int copy_file(const char* from, const char* to) {
-    static u8 tmp[4096];
-    FILE* f = fopen(from, "rb");
-    FILE* o;
-    size_t n;
-    if (f == NULL) return 0;
-    n = fread(tmp, 1, sizeof(tmp), f);
-    fclose(f);
-    o = fopen(to, "wb");
-    if (o == NULL) return 0;
-    fwrite(tmp, 1, n, o);
-    fclose(o);
-    return 1;
-}
 void port_fs_init(void) {
-    /* One-time migration of a save from the earlier locations. */
-    char old[256];
-    FILE* f = fopen(port_save_path("eeprom.bin"), "rb");
-    if (f != NULL) { fclose(f); return; }
-    snprintf(old, sizeof(old), "%seeprom.bin", port_eboot_dir());
-    if (copy_file(old, port_save_path("eeprom.bin"))) return;
-    copy_file("ms0:/MK64/eeprom.bin", port_save_path("eeprom.bin"));
+    /* data/ is created by port_set_save_dir(); nothing else to prepare. */
 }
 
 void port_fs_mkdir(const char* path) {
