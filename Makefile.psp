@@ -352,19 +352,18 @@ endef
 iso: all $(ASSETS_BIN)
 	$(call BUILD_ISO,$(BUILD_DIR)/mk64.iso)
 
-# release: clean build -> release/EBOOT.PBP (+ README.txt, MD5SUMS.txt).  The EBOOT
-# contains no game data: players put their own Mario Kart 64 (USA) .z64 ROM in
-# the same folder and the first start builds assets.bin from it.  Nothing else
-# (no assets.bin, no ISO) ships.
+# release: clean build -> release/MK64Portable/ (EBOOT.PBP + README.txt), the
+# folder players drop into ms0:/PSP/GAME/, zipped as release/MK64Portable-<ver>.zip.
+RELEASE_VERSION ?= dev
 release:
 	$(MAKE) -f Makefile.psp clean
 	$(MAKE) -f Makefile.psp all EXTRA_CFLAGS="$(EXTRA_CFLAGS)"
 	rm -rf $(RELEASE_DIR)
-	mkdir -p $(RELEASE_DIR)
-	cp $(EBOOT) $(RELEASE_DIR)/EBOOT.PBP
-	printf 'MK64 Portable\n\nAn unofficial fan port for the PSP. It contains no game data: it needs a ROM\nof Mario Kart 64 (USA) that you own. Not affiliated with or endorsed by Nintendo.\n\n1. Copy this folder to ms0:/PSP/GAME/MK64Portable/ (so it holds EBOOT.PBP).\n2. Put your Mario Kart 64 (USA) ROM (.z64, .n64 or .v64) in the same folder.\n3. Start it from the XMB. The first start reads the ROM and builds the game\n   data (about 13 MB) into a data/ folder next to the EBOOT; later starts skip this.\n   Your save is kept there too.\n' > $(RELEASE_DIR)/README.txt
-	(cd $(RELEASE_DIR) && (md5 EBOOT.PBP || md5sum EBOOT.PBP) > MD5SUMS.txt)
-	@ls -lh $(RELEASE_DIR)
+	mkdir -p $(RELEASE_DIR)/MK64Portable
+	cp $(EBOOT) $(RELEASE_DIR)/MK64Portable/EBOOT.PBP
+	printf 'MK64 Portable $(RELEASE_VERSION)\n\nAn unofficial fan port for the PSP. It contains no game data: it needs a ROM\nof Mario Kart 64 (USA) that you own. Not affiliated with or endorsed by Nintendo.\n\n1. Copy the MK64Portable folder to ms0:/PSP/GAME/ on your Memory Stick.\n2. Put your Mario Kart 64 (USA) ROM (.z64, .n64 or .v64) in that folder, next to EBOOT.PBP.\n3. Start MK64 Portable from the XMB. The first start reads the ROM and builds the game\n   data (about 13 MB) into a data/ folder; later starts skip this. Your save is kept there too.\n\nControls: steer with the analog nub or the D-pad; Cross = A, Square = B, Circle or L = Z,\nR = hop, Triangle = C-up, Start = pause. Hold Select for 3 seconds to show the FPS counter.\n' > $(RELEASE_DIR)/MK64Portable/README.txt
+	(cd $(RELEASE_DIR) && (md5 MK64Portable/EBOOT.PBP || md5sum MK64Portable/EBOOT.PBP) > MD5SUMS.txt && rm -f MK64Portable-$(RELEASE_VERSION).zip && zip -q -r MK64Portable-$(RELEASE_VERSION).zip MK64Portable)
+	@ls -lh $(RELEASE_DIR) $(RELEASE_DIR)/MK64Portable
 
 .PHONY: iso release
 
