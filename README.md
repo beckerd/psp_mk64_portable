@@ -21,7 +21,7 @@ not a project for you.
 
 - Runs at a locked 30 fps on every PSP model, including the PSP-1000 (32 MB)
 - All cups and courses: Grand Prix and Time Trial
-- True widescreen: the 3D view is rendered with a 16:9 field of view, showing more of the track instead of stretching the 4:3 picture
+- True widescreen: the 3D view is rendered with a 16:9 field of view, showing more of the track instead of stretching the 4:3 picture; the HUD and menus keep their proportions, anchored to the screen edges
 - Music, sound effects and the announcer, mixed on the PSP
 - Hardware-accelerated rendering: the N64 display lists are translated to the
   PSP's Graphics Engine, which does the vertex transform and rasterisation
