@@ -33,13 +33,14 @@ You need a PSP that can run homebrew (custom firmware such as ARK-4) and your
 own copy of *Mario Kart 64* (USA) as an N64 ROM image (`.z64`, `.n64` or
 `.v64` — any byte order works; the file name does not matter).
 
-1. Create `ms0:/PSP/GAME/MK64/` on the Memory Stick and copy `EBOOT.PBP` into it.
+1. Create `ms0:/PSP/GAME/MK64Portable/` on the Memory Stick and copy `EBOOT.PBP` into it.
 2. Copy your ROM into the same folder.
 3. Start *MK64 Portable* from the XMB.
 
 The first start shows a progress screen while the game data is built from the
-ROM and cached as `assets.bin` next to the EBOOT (about 13 MB). Later starts
-skip this. If the ROM is missing, is another game, or is not the USA version,
+ROM and cached (about 13 MB). Everything the port writes — the cache, the save,
+the log — goes into a `data/` folder next to the EBOOT. Later starts skip the
+extraction. If the ROM is missing, is another game, or is not the USA version,
 the port says so and returns to the XMB; nothing is cached from a bad ROM.
 
 Only the USA (NTSC) version is supported.

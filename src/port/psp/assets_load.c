@@ -283,16 +283,11 @@ void port_assets_load(const char* argv0) {
     }
     PORT_LOG("assets: argv0 %s dir %s\n", argv0 ? argv0 : "(null)", dir);
     strncpy(sSplashDir, dir, sizeof(sSplashDir) - 1);
-    // 1. a cache from an earlier run
-    if (dir[0]) {
-        snprintf(path, sizeof(path), "%sassets.bin", dir);
-        if (try_load(path, err, sizeof(err))) return;
-        PORT_LOG("assets: %s: %s\n", path, err);
-    }
+    // 1. a cache from an earlier run (data/ next to the EBOOT)
     if (try_load(port_save_path("assets.bin"), err, sizeof(err))) return;
     PORT_LOG("assets: %sassets.bin: %s\n", port_save_dir(), err);
-    // 2. the player's ROM: next to the EBOOT, or in ms0:/MK64/
-    if (!(dir[0] && find_rom(dir, rom, sizeof(rom))) && !find_rom(port_save_dir(), rom, sizeof(rom))) {
+    // 2. the player's ROM next to the EBOOT
+    if (!(dir[0] && find_rom(dir, rom, sizeof(rom))) && !find_rom(port_eboot_dir(), rom, sizeof(rom))) {
         fail_screen("No Mario Kart 64 ROM found.", "Copy your Mario Kart 64 (USA) .z64 file into the", "same folder as this EBOOT and start the game again.");
         return;
     }
@@ -309,7 +304,7 @@ void port_assets_load(const char* argv0) {
     }
     /* Cache right away: the recipe blob lives in the scratch pool and must not
      * be disturbed (the verifier below uses the pool's upper part). */
-    snprintf(path, sizeof(path), "%sassets.bin", dir[0] ? dir : port_save_dir());
+    snprintf(path, sizeof(path), "%s", port_save_path("assets.bin"));
     {
         extern int port_assets_crc_failed(void);
         if (port_assets_crc_failed()) {

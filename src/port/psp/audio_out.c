@@ -17,7 +17,7 @@
 #include <macros.h>
 
 #ifdef PORT_AUDIO_CAPTURE
-/* Dump the raw 32kHz s16 stereo stream to ms0:/MK64/audio.raw (a few seconds),
+/* Dump the raw s16 stereo stream to data/audio.raw next to the EBOOT (a few seconds),
  * so the exact samples the game produces can be pulled off and analysed. */
 static FILE* sCapFile;
 static u32 sCapBytes;

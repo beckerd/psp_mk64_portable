@@ -164,7 +164,7 @@ u32 port_psar_read(const char* dir, const char* tag, u8* buf, u32 cap, char* err
 }
 
 /* Load the recipe blob into `buf` (limit `cap`): from the EBOOT's PSAR, or a
- * loose recipes.bin next to the EBOOT / in ms0:/MK64/. */
+ * loose recipes.bin next to the EBOOT or in its data/ folder. */
 static u32 blob_load(const char* dir, u8* buf, u32 cap, char* err, u32 errlen) {
     u32 len = port_psar_read(dir, "RCP1", buf, cap, err, errlen), i;
     if (len && memcmp(buf, "MK64RCP1", 8) == 0) return len;

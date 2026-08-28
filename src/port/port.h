@@ -55,8 +55,10 @@ static inline int port_is_real_ptr(uintptr_t addr) {
 extern u8 gPortMemoryPool[PORT_MEMORY_POOL_SIZE];
 
 /* Where the port keeps its files (save, log, screenshots). */
-/* The port keeps everything (save, cache, log, debug dumps) next to the EBOOT.
- * port_save_dir() is set from argv[0] at boot; port_save_path("x") joins. */
+/* The port keeps everything it writes (save, cache, log, debug dumps) in a
+ * data/ folder next to the EBOOT.  port_eboot_dir() is set from argv[0] at
+ * boot; port_save_dir() is its data/ subfolder; port_save_path("x") joins. */
+const char* port_eboot_dir(void);
 const char* port_save_dir(void);
 const char* port_save_path(const char* name);
 void port_set_save_dir(const char* argv0);

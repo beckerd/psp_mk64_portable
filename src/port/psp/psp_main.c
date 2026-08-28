@@ -215,7 +215,9 @@ PORT_LOG("profile us/frame: logic %u  dl->ge %u (ge+vsync %u)  audio %u  total %
     }
 }
 
-static char sSaveDir[192] = "ms0:/PSP/GAME/MK64/";
+static char sEbootDir[192] = "ms0:/PSP/GAME/MK64Portable/";
+static char sSaveDir[200] = "ms0:/PSP/GAME/MK64Portable/data/";
+const char* port_eboot_dir(void) { return sEbootDir; }
 const char* port_save_dir(void) { return sSaveDir; }
 const char* port_save_path(const char* name) {
     static char buf[4][256];
@@ -226,24 +228,35 @@ const char* port_save_path(const char* name) {
 }
 void port_set_save_dir(const char* argv0) {
     const char* slash = argv0 ? strrchr(argv0, '/') : NULL;
-    if (slash != NULL && (size_t) (slash + 1 - argv0) < sizeof(sSaveDir)) {
-        memcpy(sSaveDir, argv0, slash + 1 - argv0);
-        sSaveDir[slash + 1 - argv0] = 0;
+    if (slash != NULL && (size_t) (slash + 1 - argv0) < sizeof(sEbootDir)) {
+        memcpy(sEbootDir, argv0, slash + 1 - argv0);
+        sEbootDir[slash + 1 - argv0] = 0;
     }
+    snprintf(sSaveDir, sizeof(sSaveDir), "%sdata/", sEbootDir);
+    sceIoMkdir(sSaveDir, 0777); /* harmless if it exists */
+}
+static int copy_file(const char* from, const char* to) {
+    static u8 tmp[4096];
+    FILE* f = fopen(from, "rb");
+    FILE* o;
+    size_t n;
+    if (f == NULL) return 0;
+    n = fread(tmp, 1, sizeof(tmp), f);
+    fclose(f);
+    o = fopen(to, "wb");
+    if (o == NULL) return 0;
+    fwrite(tmp, 1, n, o);
+    fclose(o);
+    return 1;
 }
 void port_fs_init(void) {
-    /* One-time migration from the old ms0:/MK64/ save folder. */
+    /* One-time migration of a save from the earlier locations. */
+    char old[256];
     FILE* f = fopen(port_save_path("eeprom.bin"), "rb");
     if (f != NULL) { fclose(f); return; }
-    f = fopen("ms0:/MK64/eeprom.bin", "rb");
-    if (f != NULL) {
-        static u8 tmp[4096];
-        size_t n = fread(tmp, 1, sizeof(tmp), f);
-        FILE* o;
-        fclose(f);
-        o = fopen(port_save_path("eeprom.bin"), "wb");
-        if (o != NULL) { fwrite(tmp, 1, n, o); fclose(o); }
-    }
+    snprintf(old, sizeof(old), "%seeprom.bin", port_eboot_dir());
+    if (copy_file(old, port_save_path("eeprom.bin"))) return;
+    copy_file("ms0:/MK64/eeprom.bin", port_save_path("eeprom.bin"));
 }
 
 void port_fs_mkdir(const char* path) {
