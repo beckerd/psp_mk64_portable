@@ -585,7 +585,14 @@ void set_perspective_and_aspect_ratio(void) {
     }
     switch (gScreenModeSelection) { /* switch 1; irregular */
         case SCREEN_MODE_1P:        /* switch 1 */
+#if !defined(TARGET_N64) && !defined(PORT_NO_WIDE_FOV)
+            /* True widescreen: project for the PSP's 480x272 display aspect so
+             * the port's 320x240 -> 480x272 stretch cancels out exactly and the
+             * extra width shows more of the world instead of stretching it. */
+            gScreenAspect = 480.0f / 272.0f;
+#else
             gScreenAspect = 1.33333334f;
+#endif
             return;
         case SCREEN_MODE_2P_SPLITSCREEN_VERTICAL: /* switch 1 */
             gScreenAspect = 0.66666667f;
