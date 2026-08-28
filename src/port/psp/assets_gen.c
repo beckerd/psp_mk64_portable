@@ -169,10 +169,10 @@ static u32 blob_load(const char* dir, u8* buf, u32 cap, char* err, u32 errlen) {
     u32 len = port_psar_read(dir, "RCP1", buf, cap, err, errlen), i;
     if (len && memcmp(buf, "MK64RCP1", 8) == 0) return len;
     {
-        static const char* loose[2] = { NULL, PORT_SAVE_DIR "recipes.bin" };
+        static const char* loose[2] = { NULL, NULL };
         char p2[256];
-        snprintf(p2, sizeof(p2), "%srecipes.bin", dir && dir[0] ? dir : PORT_SAVE_DIR);
-        loose[0] = p2;
+        snprintf(p2, sizeof(p2), "%srecipes.bin", dir && dir[0] ? dir : port_save_dir());
+        loose[0] = p2; loose[1] = port_save_path("recipes.bin");
         for (i = 0; i < 2; i++) {
             FILE* f = fopen(loose[i], "rb");
             if (f == NULL) continue;
@@ -291,8 +291,8 @@ int port_assets_generate(const char* dir, const char* rom_path, void (*progress)
         memset(sUnpackBuf, 0, c->unpacked_len + 64);
         displaylist_unpack((uintptr_t*) (sCompBuf + c->packed_off), c->unpacked_len, 0);
 #ifdef PORT_ASSETS_VERIFY
-        if (i == 0) { FILE* df = fopen(PORT_SAVE_DIR "unpack0.bin", "wb"); if (df) { fwrite(sUnpackBuf, 1, c->unpacked_len + 64, df); fclose(df); }
-                      df = fopen(PORT_SAVE_DIR "packed0.bin", "wb"); if (df) { fwrite(sCompBuf, 1, c->rom_len, df); fclose(df); } }
+        if (i == 0) { FILE* df = fopen(port_save_path("unpack0.bin"), "wb"); if (df) { fwrite(sUnpackBuf, 1, c->unpacked_len + 64, df); fclose(df); }
+                      df = fopen(port_save_path("packed0.bin"), "wb"); if (df) { fwrite(sCompBuf, 1, c->rom_len, df); fclose(df); } }
 #endif
         for (k = 0; k < sH->recipe_count; k++) {
             const PortAssetRecipe* r = &sRecipes[k];

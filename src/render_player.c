@@ -1546,9 +1546,9 @@ void render_kart(Player* player, s8 playerId, s8 arg2, s8 flipOffset) {
         // Debug: dump the palette and index buffer the kart sprite is drawn from.
         extern s32 gPortDumpKart;
         if (gPortDumpKart && playerId == 0 && arg2 == 0) {
-            FILE* fp = fopen(PORT_SAVE_DIR "kart_pal.bin", "wb");
+            FILE* fp = fopen(port_save_path("kart_pal.bin"), "wb");
             if (fp) { fwrite(gPlayerPalette, 1, 0x200, fp); fclose(fp); }
-            fp = fopen(PORT_SAVE_DIR "kart_tex.bin", "wb");
+            fp = fopen(port_save_path("kart_tex.bin"), "wb");
             if (fp) { fwrite(sKartUpperTexture, 1, 64 * 63, fp); fclose(fp); }
             PORT_LOG("kart dump: pal %p upper %p lower %p palIndex %d\n", gPlayerPalette, sKartUpperTexture, sKartLowerTexture, D_801651D0[arg2][playerId]);
             gPortDumpKart = 0;

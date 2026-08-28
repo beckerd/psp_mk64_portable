@@ -82,7 +82,7 @@ void port_input_script(OSContPad* pad) {
 
 #ifdef PORT_COURSE_TEST
     if (sFrame == 0) {
-        FILE* fcp = fopen(PORT_SAVE_DIR "testcourse.bin", "rb");
+        FILE* fcp = fopen(port_save_path("testcourse.bin"), "rb");
         if (fcp) { int c = fgetc(fcp); fclose(fcp); gPortForceCourse = c; PORT_LOG("TEST: forcing course %d\n", c); }
     }
     if (gGamestate == RACING && (sFrame % 30) == 0) {
@@ -141,7 +141,7 @@ void port_input_script(OSContPad* pad) {
     if (sFrame == 1320) {
         // Dump the live player-1 kart palette for comparison with the ROM copy.
         extern u8 gPlayerPalettesList[];
-        FILE* fp = fopen(PORT_SAVE_DIR "pal_p1.bin", "wb");
+        FILE* fp = fopen(port_save_path("pal_p1.bin"), "wb");
         if (fp) { fwrite(&gPlayerPalettesList[0], 1, 0x200, fp); fclose(fp); }
         PORT_LOG("script: palette dumped, gPlayerPalettesList at %p\n", &gPlayerPalettesList[0]);
     }
@@ -150,7 +150,7 @@ void port_input_script(OSContPad* pad) {
     }
     if (sFrame == 480) {
         extern u16* gMenuTextureBuffer;
-        FILE* fp = fopen(PORT_SAVE_DIR "menubuf.bin", "wb");
+        FILE* fp = fopen(port_save_path("menubuf.bin"), "wb");
         if (fp) { fwrite(gMenuTextureBuffer, 1, 320 * 240 * 2, fp); fclose(fp); }
         PORT_LOG("script: menu buffer dumped from %p\n", gMenuTextureBuffer);
     }

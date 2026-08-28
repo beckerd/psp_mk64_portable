@@ -911,11 +911,11 @@ static void gfx_debug_dump_texture(const uint16_t *p16, const uint32_t *p32, uin
     }
     if (sCount == 0) {
         extern void port_fs_mkdir(const char *path);
-        port_fs_mkdir(PORT_SAVE_DIR "tex");
+        port_fs_mkdir(port_save_path("tex"));
     }
     {
         extern unsigned int psp_tex_bound;
-        snprintf(name, sizeof(name), PORT_SAVE_DIR "tex/t%03d_id%u_fmt%u_siz%u_%ux%u_%08x.ppm", sCount++, psp_tex_bound, fmt, siz, (unsigned) width, (unsigned) height, (unsigned) (uintptr_t) src);
+        snprintf(name, sizeof(name), "%s" "tex/t%03d_id%u_fmt%u_siz%u_%ux%u_%08x.ppm", port_save_dir(), sCount++, psp_tex_bound, fmt, siz, (unsigned) width, (unsigned) height, (unsigned) (uintptr_t) src);
     }
     fp = fopen(name, "wb");
     if (fp == NULL) {

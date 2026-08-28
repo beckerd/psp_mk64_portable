@@ -264,7 +264,7 @@ void osContGetReadData(OSContPad* pad) {
 /* EEPROM: a 512 byte file next to the EBOOT                                  */
 /* ------------------------------------------------------------------------- */
 
-#define EEPROM_FILE PORT_SAVE_DIR "eeprom.bin"
+#define EEPROM_FILE port_save_path("eeprom.bin")
 #define EEPROM_SIZE 512
 
 static u8 sEeprom[EEPROM_SIZE];

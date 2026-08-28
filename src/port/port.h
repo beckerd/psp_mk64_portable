@@ -55,7 +55,11 @@ static inline int port_is_real_ptr(uintptr_t addr) {
 extern u8 gPortMemoryPool[PORT_MEMORY_POOL_SIZE];
 
 /* Where the port keeps its files (save, log, screenshots). */
-#define PORT_SAVE_DIR "ms0:/MK64/"
+/* The port keeps everything (save, cache, log, debug dumps) next to the EBOOT.
+ * port_save_dir() is set from argv[0] at boot; port_save_path("x") joins. */
+const char* port_save_dir(void);
+const char* port_save_path(const char* name);
+void port_set_save_dir(const char* argv0);
 void port_fs_init(void);
 
 /* Dump the displayed frame to PORT_SAVE_DIR/shotNNN.ppm (debugging). */

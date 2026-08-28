@@ -164,7 +164,7 @@ void port_log(const char* fmt, ...) {
     va_end(ap);
     fputs(buf, stdout);
     if (sLogFile == NULL) {
-        sLogFile = fopen(PORT_SAVE_DIR "log.txt", "w");
+        sLogFile = fopen(port_save_path("log.txt"), "w");
     }
     if (sLogFile != NULL) {
         fputs(buf, sLogFile);

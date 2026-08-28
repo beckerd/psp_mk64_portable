@@ -145,7 +145,7 @@ void port_audio_out_push(const s16* samples, u32 bytes) {
     extern volatile s32 gAudioFrameCount;
     if (gAudioFrameCount > 900 && (u32)sCapBytes < CAP_LIMIT) {
         if (sCapFile == NULL) {
-            sCapFile = fopen(PORT_SAVE_DIR "audio.raw", "wb");
+            sCapFile = fopen(port_save_path("audio.raw"), "wb");
         }
         if (sCapFile != NULL) {
             fwrite(samples, 1, bytes, sCapFile);

@@ -87,10 +87,10 @@ void tkmk00decode(u8* tkmk, u8* tmp_buf, u8* rgba16, s32 alpha_color) {
         u32 w = ((u32) tkmk[8] << 8) | tkmk[9];
         u32 h = ((u32) tkmk[10] << 8) | tkmk[11];
         if (n < 16) {
-            snprintf(name, sizeof(name), PORT_SAVE_DIR "tkmk%02d_%ux%u_a%d.in", n, (unsigned) w, (unsigned) h, (int) alpha_color);
+            snprintf(name, sizeof(name), "%s" "tkmk%02d_%ux%u_a%d.in", port_save_dir(), n, (unsigned) w, (unsigned) h, (int) alpha_color);
             fp = fopen(name, "wb");
             if (fp) { fwrite(tkmk, 1, 0xCE00, fp); fclose(fp); }
-            snprintf(name, sizeof(name), PORT_SAVE_DIR "tkmk%02d_%ux%u_a%d.out", n, (unsigned) w, (unsigned) h, (int) alpha_color);
+            snprintf(name, sizeof(name), "%s" "tkmk%02d_%ux%u_a%d.out", port_save_dir(), n, (unsigned) w, (unsigned) h, (int) alpha_color);
             fp = fopen(name, "wb");
             if (fp) { fwrite(rgba16, 1, w * h * 2, fp); fclose(fp); }
             PORT_LOG("tkmk00 %d: %ux%u alpha %d in %p out %p tmp %p\n", n, (unsigned) w, (unsigned) h, (int) alpha_color, tkmk, rgba16, tmp_buf);

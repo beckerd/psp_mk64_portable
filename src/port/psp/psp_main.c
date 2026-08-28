@@ -215,8 +215,35 @@ PORT_LOG("profile us/frame: logic %u  dl->ge %u (ge+vsync %u)  audio %u  total %
     }
 }
 
+static char sSaveDir[192] = "ms0:/PSP/GAME/MK64/";
+const char* port_save_dir(void) { return sSaveDir; }
+const char* port_save_path(const char* name) {
+    static char buf[4][256];
+    static int i;
+    char* b = buf[i++ & 3];
+    snprintf(b, 256, "%s%s", sSaveDir, name);
+    return b;
+}
+void port_set_save_dir(const char* argv0) {
+    const char* slash = argv0 ? strrchr(argv0, '/') : NULL;
+    if (slash != NULL && (size_t) (slash + 1 - argv0) < sizeof(sSaveDir)) {
+        memcpy(sSaveDir, argv0, slash + 1 - argv0);
+        sSaveDir[slash + 1 - argv0] = 0;
+    }
+}
 void port_fs_init(void) {
-    sceIoMkdir("ms0:/MK64", 0777);
+    /* One-time migration from the old ms0:/MK64/ save folder. */
+    FILE* f = fopen(port_save_path("eeprom.bin"), "rb");
+    if (f != NULL) { fclose(f); return; }
+    f = fopen("ms0:/MK64/eeprom.bin", "rb");
+    if (f != NULL) {
+        static u8 tmp[4096];
+        size_t n = fread(tmp, 1, sizeof(tmp), f);
+        FILE* o;
+        fclose(f);
+        o = fopen(port_save_path("eeprom.bin"), "wb");
+        if (o != NULL) { fwrite(tmp, 1, n, o); fclose(o); }
+    }
 }
 
 void port_fs_mkdir(const char* path) {
@@ -262,7 +289,7 @@ void port_depthshot(int index) {
     sceGuFinish();
     sceGuSync(0, 0);
     sceKernelDcacheInvalidateRange(sCopy, sizeof(sCopy));
-    snprintf(name, sizeof(name), PORT_SAVE_DIR "depth%03d.ppm", index);
+    snprintf(name, sizeof(name), "%s" "depth%03d.ppm", port_save_dir(), index);
     fp = fopen(name, "wb");
     if (fp == NULL) {
         return;
@@ -285,7 +312,7 @@ static void port_dump_buffer(int index, const void* topaddr, int bufferwidth, in
     int x, y;
     static u8 row[480 * 3];
 
-    snprintf(name, sizeof(name), PORT_SAVE_DIR "shot%03d.ppm", index);
+    snprintf(name, sizeof(name), "%s" "shot%03d.ppm", port_save_dir(), index);
     fp = fopen(name, "wb");
     if (fp == NULL) {
         return;
@@ -339,7 +366,7 @@ static void run_one_iteration(void) {
         static u16 buf[512 * 2] __attribute__((aligned(64)));
         FILE* fp;
         texman_debug_readback(5, buf, 2048);
-        fp = fopen(PORT_SAVE_DIR "tex5_vram.bin", "wb");
+        fp = fopen(port_save_path("tex5_vram.bin"), "wb");
         if (fp) { fwrite(buf, 1, 2048, fp); fclose(fp); }
     }
 #endif
@@ -420,6 +447,7 @@ int main(UNUSED int argc, char** argv) {
     setup_callbacks();
     scePowerSetClockFrequency(333, 333, 166);
     pspDebugScreenInit();
+    port_set_save_dir(argc > 0 ? argv[0] : NULL); // everything lives next to the EBOOT
     port_assets_load(argc > 0 ? argv[0] : NULL); // ROM-derived data lives outside the EBOOT
     // (no boot banner: the debug console is only initialised so the screen is black until the GE draws)
     port_fs_init();

@@ -160,7 +160,7 @@ static void screen_progress(const char* what, int pct) {
         splash_text_center(216, p);
     }
 #ifdef PORT_SPLASH_DUMP
-    { static int dumped; if (!dumped && pct >= 40) { FILE* f = fopen(PORT_SAVE_DIR "splash.ppm", "wb"); int x, y; dumped = 1;
+    { static int dumped; if (!dumped && pct >= 40) { FILE* f = fopen(port_save_path("splash.ppm"), "wb"); int x, y; dumped = 1;
         if (f) { fprintf(f, "P6\n480 272\n255\n"); for (y = 0; y < SCR_H; y++) for (x = 0; x < SCR_W; x++) { u32 v = VRAM32[y * SCR_STRIDE + x]; u8 px[3] = { v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF }; fwrite(px, 1, 3, f); } fclose(f); } } }
 #endif
 }
@@ -289,10 +289,10 @@ void port_assets_load(const char* argv0) {
         if (try_load(path, err, sizeof(err))) return;
         PORT_LOG("assets: %s: %s\n", path, err);
     }
-    if (try_load(PORT_SAVE_DIR "assets.bin", err, sizeof(err))) return;
-    PORT_LOG("assets: " PORT_SAVE_DIR "assets.bin: %s\n", err);
+    if (try_load(port_save_path("assets.bin"), err, sizeof(err))) return;
+    PORT_LOG("assets: %sassets.bin: %s\n", port_save_dir(), err);
     // 2. the player's ROM: next to the EBOOT, or in ms0:/MK64/
-    if (!(dir[0] && find_rom(dir, rom, sizeof(rom))) && !find_rom(PORT_SAVE_DIR, rom, sizeof(rom))) {
+    if (!(dir[0] && find_rom(dir, rom, sizeof(rom))) && !find_rom(port_save_dir(), rom, sizeof(rom))) {
         fail_screen("No Mario Kart 64 ROM found.", "Copy your Mario Kart 64 (USA) .z64 file into the", "same folder as this EBOOT and start the game again.");
         return;
     }
@@ -309,7 +309,7 @@ void port_assets_load(const char* argv0) {
     }
     /* Cache right away: the recipe blob lives in the scratch pool and must not
      * be disturbed (the verifier below uses the pool's upper part). */
-    snprintf(path, sizeof(path), "%sassets.bin", dir[0] ? dir : PORT_SAVE_DIR);
+    snprintf(path, sizeof(path), "%sassets.bin", dir[0] ? dir : port_save_dir());
     {
         extern int port_assets_crc_failed(void);
         if (port_assets_crc_failed()) {
@@ -321,7 +321,7 @@ void port_assets_load(const char* argv0) {
         }
     }
 #ifdef PORT_ASSETS_VERIFY
-    verify_against(PORT_SAVE_DIR "assets_ref.bin");
+    verify_against(port_save_path("assets_ref.bin"));
 #endif
     screen_progress("Done", 100);
     sceKernelDelayThread(400 * 1000);
