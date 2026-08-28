@@ -560,7 +560,7 @@ static uint32_t gfx_flush_index;
  * designed against: elements in the left third of the 320-wide layout stay
  * flush left, the right third flush right, the middle stays centred.
  * Full-width fills keep the plain stretch so they never leave side bars. */
-int gfx_hud_anchor;                 /* inside the HUD markers this frame */
+int gfx_hud_anchor;                 /* 0 stretch (legacy), 1 race HUD (anchor by side), 2 menus (centre) */
 static int hud_batch_class = -1;    /* anchor class of the pending GE batch */
 static int hud_load_class = -1;     /* anchor class of the last gSPVertex load */
 #define HUD_CLASS_LEFT 0
@@ -576,6 +576,7 @@ static float hud_shift(int cls) {
 static int hud_class(float x0, float x1) {
     float c;
     if (x0 <= 1.0f && x1 >= 2.0f * HALF_SCREEN_WIDTH - 1.0f) return HUD_CLASS_FULL;
+    if (gfx_hud_anchor == 2) return HUD_CLASS_CENTRE; /* menus: the 4:3 layout centred over the stretched background */
     /* Only elements sitting on the centre line (item box, GO!/FINISH) stay
      * centred; everything else follows its side.  A narrow band keeps
      * multi-sprite elements (LAP + digits, TIME + digits) together and lets the
@@ -2986,9 +2987,10 @@ static void gfx_run_dl(Gfx* cmd) {
         switch (opcode) {
             case G_NOOP:
 #ifdef PORT_GE_TL
-                if (cmd->words.w1 == PORT_HUD_TAG_ON || cmd->words.w1 == PORT_HUD_TAG_OFF) {
-                    gfx_flush();
-                    gfx_hud_anchor = (cmd->words.w1 == PORT_HUD_TAG_ON);
+                if (cmd->words.w1 == PORT_HUD_TAG_ON || cmd->words.w1 == PORT_HUD_TAG_OFF || cmd->words.w1 == PORT_HUD_TAG_CENTRE) {
+                    int mode = cmd->words.w1 == PORT_HUD_TAG_ON ? 1 : cmd->words.w1 == PORT_HUD_TAG_CENTRE ? 2 : 0;
+                    if (mode != gfx_hud_anchor) gfx_flush();
+                    gfx_hud_anchor = mode;
                 }
 #endif
                 break;

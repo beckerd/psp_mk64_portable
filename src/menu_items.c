@@ -8967,10 +8967,23 @@ void handle_menus_with_pri_arg(s32 priSpecial) {
                 isRendered = true;
             }
             if ((isRendered != 0) && (j == (s8) entry->priority)) {
+#ifdef TARGET_PSP
+                /* Full-screen backgrounds stretch to the wide display; every
+                 * other menu element keeps its 4:3 proportions, centred. */
+                if (type == MENU_ITEM_UI_START_BACKGROUND || type == MAIN_MENU_BACKGROUND ||
+                    type == CHARACTER_SELECT_BACKGROUND || type == COURSE_SELECT_BACKGROUND) {
+                    gDPNoOpTag(gDisplayListHead++, PORT_HUD_TAG_OFF);
+                } else {
+                    gDPNoOpTag(gDisplayListHead++, PORT_HUD_TAG_CENTRE);
+                }
+#endif
                 render_menus(entry);
             }
         }
     }
+#ifdef TARGET_PSP
+    gDPNoOpTag(gDisplayListHead++, PORT_HUD_TAG_OFF);
+#endif
 }
 
 void handle_menus_default(void) {

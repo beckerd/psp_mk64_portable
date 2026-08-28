@@ -82,5 +82,6 @@ void port_input_poll(void);        // fill controller state
  * can anchor its 2D elements to the screen edges on the wide display. */
 #define PORT_HUD_TAG_ON  0x48554431u /* 'HUD1' */
 #define PORT_HUD_TAG_OFF 0x48554430u /* 'HUD0' */
+#define PORT_HUD_TAG_CENTRE 0x48554432u /* 'HUD2': menus -- uniform scale, centred */
 
 #endif /* PORT_H */
