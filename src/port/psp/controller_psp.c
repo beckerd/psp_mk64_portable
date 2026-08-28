@@ -97,5 +97,15 @@ void controller_psp_read(OSContPad* pad) {
     pad->button = b;
     pad->stick_x = map_axis(d.Lx);
     pad->stick_y = (s8) -map_axis(d.Ly); // PSP Y grows downward
+    /* The D-pad steers too: Mario Kart 64 ignores the N64 D-pad, and the PSP
+     * nub is imprecise.  Full deflection (diagonals scaled to keep the
+     * magnitude) whenever the nub itself is centred. */
+    if (pad->stick_x == 0 && pad->stick_y == 0) {
+        int dx = ((d.Buttons & PSP_CTRL_RIGHT) ? 1 : 0) - ((d.Buttons & PSP_CTRL_LEFT) ? 1 : 0);
+        int dy = ((d.Buttons & PSP_CTRL_UP) ? 1 : 0) - ((d.Buttons & PSP_CTRL_DOWN) ? 1 : 0);
+        int mag = (dx && dy) ? 57 : 80; /* 80/sqrt(2) on diagonals */
+        pad->stick_x = (s8) (dx * mag);
+        pad->stick_y = (s8) (dy * mag);
+    }
     pad->errno = 0;
 }
