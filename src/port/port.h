@@ -78,4 +78,9 @@ void port_gfx_end_frame(void);     // present + vsync
 void port_audio_frame(void);       // mix one game frame worth of audio
 void port_input_poll(void);        // fill controller state
 
+/* Display-list markers (gDPNoOpTag) bracketing the race HUD so the renderer
+ * can anchor its 2D elements to the screen edges on the wide display. */
+#define PORT_HUD_TAG_ON  0x48554431u /* 'HUD1' */
+#define PORT_HUD_TAG_OFF 0x48554430u /* 'HUD0' */
+
 #endif /* PORT_H */

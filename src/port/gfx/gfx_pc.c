@@ -23,6 +23,7 @@
 #include "gfx_rendering_api.h"
 #include "gfx_screen_config.h"
 #include "macros.h"
+#include "port.h"
 
 /* Full GE hardware transform+light+cull offload. Implies PORT_GE_CULL (no CPU
  * cull/clip): additionally feeds OBJECT-space vertices and sets GU_MODEL to the
@@ -553,6 +554,35 @@ void gfx_clip_single_vert( struct LoadedVertex *p_p_vertices, size_t *p_num_vert
 
 static uint32_t gfx_flush_index;
 #ifdef PORT_GE_TL
+/* Widescreen HUD anchoring.  Between the HUD_ON/HUD_OFF display-list markers
+ * (gDPNoOpTag from render_hud) every 2D element is scaled uniformly (the 4:3
+ * layout keeps its proportions) and anchored to the screen edge it was
+ * designed against: elements in the left third of the 320-wide layout stay
+ * flush left, the right third flush right, the middle stays centred.
+ * Full-width fills keep the plain stretch so they never leave side bars. */
+int gfx_hud_anchor;                 /* inside the HUD markers this frame */
+static int hud_batch_class = -1;    /* anchor class of the pending GE batch */
+static int hud_load_class = -1;     /* anchor class of the last gSPVertex load */
+#define HUD_CLASS_LEFT 0
+#define HUD_CLASS_CENTRE 1
+#define HUD_CLASS_RIGHT 2
+#define HUD_CLASS_FULL 3
+static float hud_scale(void) { return (float) gfx_current_dimensions.height / (2.0f * HALF_SCREEN_HEIGHT); }
+static float hud_shift(int cls) {
+    float spare = (float) gfx_current_dimensions.width - (2.0f * HALF_SCREEN_WIDTH) * hud_scale();
+    return cls == HUD_CLASS_LEFT ? 0.0f : cls == HUD_CLASS_RIGHT ? spare : spare * 0.5f;
+}
+/* x0/x1: horizontal extent in the game's 320-wide layout space. */
+static int hud_class(float x0, float x1) {
+    float c;
+    if (x0 <= 1.0f && x1 >= 2.0f * HALF_SCREEN_WIDTH - 1.0f) return HUD_CLASS_FULL;
+    /* Only elements sitting on the centre line (item box, GO!/FINISH) stay
+     * centred; everything else follows its side.  A narrow band keeps
+     * multi-sprite elements (LAP + digits, TIME + digits) together and lets the
+     * lap counter slide in from off-screen without changing class. */
+    c = 0.5f * (x0 + x1) - HALF_SCREEN_WIDTH;
+    return c < -24.0f ? HUD_CLASS_LEFT : c > 24.0f ? HUD_CLASS_RIGHT : HUD_CLASS_CENTRE;
+}
 static float ge_last_mp[4][4];
 static uint32_t ge_list_used; /* bytes written to the GE list since the last (re)start */
 #ifndef GE_LIST_RECYCLE
@@ -576,11 +606,25 @@ static void gfx_flush(void) {
         // The GE applies MP as GU_PROJECTION to object-space vertices.  Only push
         // it when it actually changed (the course keeps a constant MP for many
         // batches) -- redundant pushes bloat the GE list ~2x.
-        if (memcmp(ge_last_mp, rsp.MP_matrix, sizeof(rsp.MP_matrix)) != 0) {
+        float hud_mp[4][4] __attribute__((aligned(16)));
+        const float (*use_mp)[4] = rsp.MP_matrix;
+        if (gfx_hud_anchor && !rsp.is_persp && hud_batch_class >= 0 && hud_batch_class != HUD_CLASS_FULL) {
+            /* Ortho HUD quads: fold the anchor into the projection's x column,
+             * ndc.x' = a * ndc.x + b, so the GE lands them where a uniformly
+             * scaled, edge-anchored 320x240 layout puts them. */
+            float half_w = 0.5f * (float) gfx_current_dimensions.width;
+            float a = hud_scale() * HALF_SCREEN_WIDTH / half_w;
+            float b = (hud_scale() * HALF_SCREEN_WIDTH + hud_shift(hud_batch_class)) / half_w - 1.0f;
+            int i;
+            memcpy(hud_mp, rsp.MP_matrix, sizeof(hud_mp));
+            for (i = 0; i < 4; i++) hud_mp[i][0] = a * rsp.MP_matrix[i][0] + b * rsp.MP_matrix[i][3];
+            use_mp = hud_mp;
+        }
+        if (memcmp(ge_last_mp, use_mp, sizeof(rsp.MP_matrix)) != 0) {
             void *mp = (void *) ALIGN((unsigned int) sceGuGetMemory(sizeof(rsp.MP_matrix) + 15), 16);
-            memcpy(mp, rsp.MP_matrix, sizeof(rsp.MP_matrix));
+            memcpy(mp, use_mp, sizeof(rsp.MP_matrix));
             sceGuSetMatrix(GU_PROJECTION, (const ScePspFMatrix4 *) mp);
-            memcpy(ge_last_mp, rsp.MP_matrix, sizeof(rsp.MP_matrix));
+            memcpy(ge_last_mp, use_mp, sizeof(rsp.MP_matrix));
             ge_list_used += sizeof(rsp.MP_matrix) + 32u;
         }
 #endif
@@ -615,6 +659,9 @@ static void gfx_flush(void) {
         buf_vbo_len = 0;
         buf_num_vert = 0;
         buf_vbo_num_tris = 0;
+#ifdef PORT_GE_TL
+        hud_batch_class = -1;
+#endif
         //unsigned long t1 = get_time();
         /*if (t1 - t0 > 1000) {
             printf("f: %d %d\n", num, (int)(t1 - t0));
@@ -1433,6 +1480,16 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                 // Beyond the far plane (z_ndc > 1): the GE would drop the whole triangle.
                 if (wz - proj_vec[2] < 0.0f) d->clip_rej |= Z_NEG;
             }
+        } else if (gfx_hud_anchor) {
+            /* Ortho HUD element: clip.x (w == 1) tells which screen edge it belongs to. */
+            __asm__ volatile (
+                "lv.q  c200, %1\n"
+                "vtfm4.q c100, e700, c200\n"
+                "sv.q  c100, %0\n"
+                : "=m"(*proj_vec) : "m"(*temp_vec)
+            );
+            d->_x = proj_vec[3] != 0.0f ? proj_vec[0] / proj_vec[3] : proj_vec[0];
+            d->_w = proj_vec[3];
         }
 #else
         d->x = view_vec[0]; // view space; the GE applies the projection
@@ -1503,6 +1560,18 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
 #ifdef PORT_PROFILE_DL
     gfx_prof_vtx += port_time_us() - _pv0;
     gfx_prof_vtxcount += n_vertices;
+#endif
+#ifdef PORT_GE_TL
+    if (gfx_hud_anchor && !rsp.is_persp) {
+        float x0 = 1e9f, x1 = -1e9f;
+        size_t i;
+        for (i = 0; i < n_vertices; i++) {
+            float x = (rsp.loaded_vertices[dest_index - n_vertices + i]._x + 1.0f) * HALF_SCREEN_WIDTH;
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+        }
+        hud_load_class = hud_class(x0, x1);
+    }
 #endif
 }
 
@@ -1779,6 +1848,12 @@ static void gfx_emit_triangle(const struct LoadedVertex *a, const struct LoadedV
     if (buf_vbo_num_tris == MAX_BUFFERED) {
         gfx_flush();
     }
+#ifdef PORT_GE_TL
+    if (gfx_hud_anchor && !rsp.is_persp) {
+        if (buf_vbo_num_tris > 0 && hud_batch_class != hud_load_class) gfx_flush();
+        hud_batch_class = hud_load_class;
+    }
+#endif
 #ifdef PORT_GFX_DEBUG
     if (gfx_debug_frame && (a->_w < 2.0f || b->_w < 2.0f || c->_w < 2.0f)) {
         extern uint32_t gfx_prof_neareye;
@@ -2719,6 +2794,16 @@ static void gfx_draw_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lr
 
     ulxf = (ulxf*240)+240;
     lrxf = (lrxf*240)+240;
+#ifdef PORT_GE_TL
+    if (gfx_hud_anchor) {
+        float x0 = ulx / 4.0f, x1 = lrx / 4.0f;
+        int cls = hud_class(x0, x1);
+        if (cls != HUD_CLASS_FULL) {
+            ulxf = x0 * hud_scale() + hud_shift(cls);
+            lrxf = x1 * hud_scale() + hud_shift(cls);
+        }
+    }
+#endif
 
     ulyf = (ulyf*136)+136;
     lryf = (lryf*136)+136;
@@ -2899,6 +2984,14 @@ static void gfx_run_dl(Gfx* cmd) {
         uint32_t prof_t0 = prof_slot ? port_time_us() : 0;
 #endif
         switch (opcode) {
+            case G_NOOP:
+#ifdef PORT_GE_TL
+                if (cmd->words.w1 == PORT_HUD_TAG_ON || cmd->words.w1 == PORT_HUD_TAG_OFF) {
+                    gfx_flush();
+                    gfx_hud_anchor = (cmd->words.w1 == PORT_HUD_TAG_ON);
+                }
+#endif
+                break;
             // RSP commands:
             case G_MTX:
                 gfx_flush();
@@ -3214,6 +3307,7 @@ void gfx_start_frame(void) {
 #ifdef PORT_GE_TL
     memset(ge_last_mp, 0, sizeof(ge_last_mp)); // GE list reset each frame -> re-push GU_PROJECTION on the first batch
     ge_list_used = 0;
+    gfx_hud_anchor = 0;
 #endif
     gfx_flush_index = 0;
     // Recycle the texture arena between frames (the previous frame's display

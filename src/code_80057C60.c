@@ -36,6 +36,9 @@
 #include "spawn_players.h"
 #include "sounds.h"
 #include "data/some_data.h"
+#ifdef TARGET_PSP
+#include "port/port.h"
+#endif
 
 //! @warning this macro is undef'd at the end of this file
 #define MAKE_RGB(r, g, b) (((r) << 0x10) | ((g) << 0x08) | (b << 0x00))
@@ -884,6 +887,9 @@ void func_80058C20(u32 arg0) {
 void render_hud(u32 arg0) {
 
     D_8018D21C = arg0;
+#ifdef TARGET_PSP
+    gDPNoOpTag(gDisplayListHead++, PORT_HUD_TAG_ON);
+#endif
     gSPDisplayList(gDisplayListHead++, &D_0D0076F8);
     if (D_8018D22C == 0) {
         switch (arg0) {
@@ -1064,6 +1070,9 @@ void func_800591B4(void) {
         func_80057DD0();
         func_80057CE4();
     }
+#ifdef TARGET_PSP
+    gDPNoOpTag(gDisplayListHead++, PORT_HUD_TAG_OFF);
+#endif
 }
 
 void func_80059358(void) {
