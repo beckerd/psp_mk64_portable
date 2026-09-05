@@ -55,11 +55,14 @@ static const ScriptStep sSteps[] = {
     TAP(900, A_BUTTON),
     TAP(960, A_BUTTON),   // skip course intro pan if it is still showing
     TAP(1020, A_BUTTON),
+#ifdef PORT_MANUAL_RACE
+    // Menus only: the pad is handed over as the race starts (see SCRIPT_END).
+};
+#define SCRIPT_END 1060
+#else
     // Race: hold A and keep a gentle right-hand line (Luigi Raceway runs
     // clockwise), with one hop/drift to exercise R.
-    { 1100, 1300, A_BUTTON, 0, 0 },
-    { 1301, 1360, A_BUTTON, -40, 0 },
-    { 1361, 1520, A_BUTTON, 30, 0 },
+    { 1100, 1520, A_BUTTON, -80, 0 },  // steer hard left into the rail (issue #10: the kart shadow goes solid there)
     { 1521, 1600, A_BUTTON | R_TRIG, -100, 0 },  // hard drift turn (behind-camera regression check)
     { 1601, 1700, A_BUTTON, 30, 0 },
     { 1301, 1360, A_BUTTON, -40, 0 },
@@ -70,8 +73,8 @@ static const ScriptStep sSteps[] = {
     { 1991, 2080, A_BUTTON, 80, 0 },    // sharp right
     { 2081, 3200, A_BUTTON, 25, 0 },
 };
-
 #define SCRIPT_END 3300
+#endif
 #define SHOT_EVERY 120
 
 #ifdef PORT_COURSE_TEST
@@ -132,7 +135,7 @@ void port_input_script(OSContPad* pad) {
         sLastState = gGamestate;
         sLastMenu = gMenuSelection;
     }
-    if (((sFrame % SHOT_EVERY) == 0 && sFrame >= 240) || sFrame == 450 /* top-level game select: OPTION/DATA */ || sFrame == 1202 /* the frame traced at 1201 */ ||
+    if (((sFrame % SHOT_EVERY) == 0 && sFrame >= 240) || sFrame == 450 /* top-level game select: OPTION/DATA */ || sFrame == 1442 /* the frame traced at 1441 */ || sFrame == 1352 ||
         (sFrame >= 1380 && sFrame <= 1700 && (sFrame % 30) == 0)) {
         port_screenshot((int) sFrame);
         if (gGamestate == RACING && gPlayerOne != NULL) {
@@ -154,7 +157,22 @@ void port_input_script(OSContPad* pad) {
         PORT_LOG("script: menu buffer dumped from %p\n", gMenuTextureBuffer);
     }
 #ifdef PORT_COURSE_TEST
-    if (sFrame == 1201 && gPortForceCourse >= 0) {
+    if (sFrame == 1443 && gPortForceCourse >= 0) {
+        // Dump the kart shadow textures as the GE sees them (issue #10): the
+        // two 64x32 8888 halves are texture ids 303/304 on Rainbow Road.
+        extern unsigned char* texman_get_tex_data(unsigned int num);
+        extern unsigned char texman_get_tex_type(unsigned int num);
+        unsigned int id;
+        for (id = 300; id <= 306; id++) {
+            char name[48];
+            FILE* fp;
+            const unsigned char* d = texman_get_tex_data(id);
+            snprintf(name, sizeof(name), "texmem%u_type%u.bin", id, texman_get_tex_type(id));
+            fp = fopen(port_save_path(name), "wb");
+            if (fp) { if (d) fwrite(d, 1, 8192, fp); fclose(fp); }
+        }
+    }
+    if (sFrame == 1441 && gPortForceCourse >= 0) {
         // One traced race frame on the forced course (issue #1: Moo Moo Farm road patches).
         extern int gfx_debug_frame, gfx_trace_frames;
         gfx_debug_frame = 1;
@@ -170,6 +188,38 @@ void port_input_script(OSContPad* pad) {
     }
     if (sFrame == SCRIPT_END) {
         PORT_LOG("script done\n");
+    }
+    if (sFrame > SCRIPT_END) {
+        // Manual capture: after the script ends the pad is live; a Triangle
+        // (C-up) press traces this frame, screenshots it next frame and dumps
+        // the kart shadow textures (issue #10).
+        static int armed = 1, shotNext = 0;
+        if (shotNext) {
+            port_screenshot(9000 + shotNext);
+            shotNext = 0;
+        }
+        if ((pad->button & U_CBUTTONS) && armed) {
+            extern int gfx_debug_frame, gfx_trace_frames;
+            extern unsigned char* texman_get_tex_data(unsigned int num);
+            extern unsigned char texman_get_tex_type(unsigned int num);
+            static int n;
+            unsigned int id;
+            gfx_debug_frame = 1;
+            gfx_trace_frames = 1;
+            for (id = 1; id < 512; id++) {
+                const unsigned char* d = texman_get_tex_data(id);
+                if (d && texman_get_tex_type(id) == 3) { /* every 8888 texture (the shadow halves are 64x32 8888) */
+                    char name[48]; FILE* fp;
+                    snprintf(name, sizeof(name), "cap%d_tex%u.bin", n, id);
+                    fp = fopen(port_save_path(name), "wb");
+                    if (fp) { fwrite(d, 1, 8192, fp); fclose(fp); }
+                }
+            }
+            PORT_LOG("manual capture %d at frame %u\n", n, sFrame);
+            shotNext = ++n;
+            armed = 0;
+        }
+        if (!(pad->button & U_CBUTTONS)) armed = 1;
     }
     sFrame++;
 }
