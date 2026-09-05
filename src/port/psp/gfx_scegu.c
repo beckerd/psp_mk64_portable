@@ -256,6 +256,7 @@ static uint8_t shader_program_pool_size;
 static struct ShaderProgram *cur_shader = NULL;
 static struct SamplerState tmu_state[2];
 static bool gl_blend = false;
+static int dbg_texfunc = -1, dbg_alphatest = -1; /* debug: last GE state sent */
 
 static inline uint32_t get_shader_index(uint32_t id) {
     size_t i;
@@ -364,9 +365,11 @@ static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
         sceGuEnable(GU_ALPHA_TEST);
         sceGuAlphaFunc(GU_GREATER, 0x55, 0xff); /* 0.3f  */
         GULOG("  gu: alphatest on\n");
+        dbg_alphatest = 1;
     } else {
         sceGuDisable(GU_ALPHA_TEST);
         GULOG("  gu: alphatest off\n");
+        dbg_alphatest = 0;
     }
 
     if (!prg->enabled) {
@@ -395,17 +398,8 @@ static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
         if (prg->shader_id == 0x01A00045) {
             mode = GU_TFX_REPLACE;
         }
-        /* The texel alpha only takes part when the alpha combiner reads it;
-         * otherwise the vertex alpha (the fog opacity on fogged geometry) is
-         * the whole alpha, and an IA texture's alpha must not mottle it. */
-        {
-            int alpha_uses_texel = 0, j;
-            for (j = 0; j < 4; j++) {
-                uint8_t c = prg->cc.c[1][j];
-                if (c == SHADER_TEXEL0 || c == SHADER_TEXEL0A || c == SHADER_TEXEL1) alpha_uses_texel = 1;
-            }
-            sceGuTexFunc(mode, alpha_uses_texel ? GU_TCC_RGBA : GU_TCC_RGB);
-        }
+        sceGuTexFunc(mode, GU_TCC_RGBA);
+        dbg_texfunc = mode;
         GULOG("  gu: texfunc %d\n", mode);
     }
 }
@@ -640,7 +634,9 @@ void gfx_scegu_set_cull_mode(uint32_t cull) {
     sceGuFrontFace((cull & G_CULL_FRONT) ? GU_CCW : GU_CW);
 }
 
+static int dbg_depth_test = -1;
 static void gfx_scegu_set_depth_test(bool depth_test) {
+    dbg_depth_test = depth_test;
     if (depth_test) {
         sceGuEnable(GU_DEPTH_TEST);
         GULOG("  gu: depth on\n");
@@ -719,7 +715,8 @@ extern void memcpy_vfpu(void *dst, const void *src, size_t size);
 static void gfx_scegu_draw_triangles(float buf_vbo[], UNUSED size_t buf_vbo_len, size_t buf_vbo_num_tris) {
     if (gfx_debug_frame) {
         const Vertex* v = (const Vertex*) buf_vbo;
-        port_log("  tris %d: v0 (%.2f,%.2f,%.2f) uv (%.2f,%.2f) col %08X tex %d\n", (int) buf_vbo_num_tris, v[0].x, v[0].y, v[0].z, v[0].u, v[0].v, v[0].color, (cur_shader && cur_shader->texture_used[0]) ? (int) psp_tex_bound : -1);
+        port_log("  tris %d: v0 (%.2f,%.2f,%.2f) uv (%.2f,%.2f) col %08X tex %d [blend %d alphatest %d texfunc %d depth %d]\n", (int) buf_vbo_num_tris, v[0].x, v[0].y, v[0].z, v[0].u, v[0].v, v[0].color, (cur_shader && cur_shader->texture_used[0]) ? (int) psp_tex_bound : -1,
+                 gl_blend, dbg_alphatest, dbg_texfunc, dbg_depth_test);
     }
     if (!is_shader_enabled(cur_shader->shader_id)) {
         gfx_scegu_apply_shader(get_shader_from_id(get_shader_remap(cur_shader->shader_id)));
