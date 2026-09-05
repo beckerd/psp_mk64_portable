@@ -853,8 +853,14 @@ static uint32_t gfx_texture_content_hash(int tile, uint32_t fmt, uint32_t siz) {
     // change; only buffers in BSS / the game's pools need hashing.  A CI
     // texture still hashes a palette that lives in writable memory.
     if (gfx_is_static_memory(src)) {
-        if (fmt == G_IM_FMT_CI && rdp.palette != NULL && !gfx_is_static_memory(rdp.palette)) {
-            return hash_bytes(h, rdp.palette, siz == G_IM_SIZ_4b ? 32 : 512);
+        if (fmt == G_IM_FMT_CI && rdp.palette != NULL) {
+            if (!gfx_is_static_memory(rdp.palette)) {
+                return hash_bytes(h, rdp.palette, siz == G_IM_SIZ_4b ? 32 : 512);
+            }
+            // Static texels with a static palette: the palette's ADDRESS still
+            // has to take part (Rainbow Road animates by cycling through
+            // several TLUTs over the same CI texels).
+            return (uint32_t) (uintptr_t) rdp.palette | 1u;
         }
         return 1;
     }
@@ -2941,7 +2947,17 @@ static void gfx_dp_fill_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t
     }
     
     uint32_t saved_combine_mode = rdp.combine_mode;
-    gfx_dp_set_combine_mode(color_comb(0, 0, 0, G_CCMUX_SHADE), color_comb(0, 0, 0, G_ACMUX_SHADE), 0);
+    if (mode == G_CYC_FILL || mode == G_CYC_COPY) {
+        // FILL mode: the RDP writes the fill colour straight to the framebuffer.
+        gfx_dp_set_combine_mode(color_comb(0, 0, 0, G_CCMUX_SHADE), color_comb(0, 0, 0, G_ACMUX_SHADE), 0);
+    }
+    // 1/2-cycle mode: the rectangle goes through the current combiner and
+    // blender like any primitive.  MK64's draw_box (pause dim, menu fades,
+    // the lightning flash, the fall-off blackout) does exactly that: XLU_SURF
+    // + G_CC_PRIMITIVE with the box colour and an 8-bit alpha in the prim
+    // colour.  Forcing the fill colour here (what sm64-port did) drew those
+    // boxes opaque black or not at all, depending on the fill colour's 1-bit
+    // alpha.
     gfx_draw_rectangle(ulx, uly, lrx, lry);
     rdp.combine_mode = saved_combine_mode;
 }
