@@ -122,7 +122,13 @@ INCLUDE_DIRS := include $(BUILD_DIR) $(BUILD_DIR)/include src src/racing src/end
 DEF_INC_CFLAGS := $(foreach i,$(INCLUDE_DIRS),-I$(i)) $(C_DEFINES) -I$(PSPSDK)/include
 
 OPT_FLAGS ?= -O2 $(EXTRA_CFLAGS)
-CFLAGS  := $(OPT_FLAGS) -G0 -std=gnu99 -fsigned-char -fno-strict-aliasing -fwrapv -fno-common \
+# -fno-toplevel-reorder: keep globals in source order.  The decomp's data
+# tables sit in ROM order, and the game indexes past the end of several of
+# them into their neighbours (menu_items.c: D_800E8274[type - 0x12] reaches
+# back into D_800E8254 for the GAME SELECT banner and the OPTION/DATA
+# buttons, D_800E70A0[type - 0xA] runs on into D_800E70E8, ...).  GCC's
+# default reverse emission broke every such walk (issues #5, #6).
+CFLAGS  := $(OPT_FLAGS) -G0 -std=gnu99 -fsigned-char -fno-strict-aliasing -fwrapv -fno-common -fno-toplevel-reorder \
            -Wall -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function -Wno-unused-parameter \
            -Wno-missing-braces -Wno-char-subscripts -Wno-sign-compare -Wno-int-in-bool-context \
            -Wno-error=incompatible-pointer-types -Wno-error=int-conversion \
@@ -154,6 +160,10 @@ ASSET_OBJS := $(filter $(BUILD_DIR)/assets/% $(BUILD_DIR)/courses/% $(BUILD_DIR)
                        $(BUILD_DIR)/src/port/audio_blobs.o $(BUILD_DIR)/src/data/textures.o \
                        $(BUILD_DIR)/src/data/some_data.o $(BUILD_DIR)/src/data/data_segment2.o \
                        $(BUILD_DIR)/src/data/path_spawn_metadata.o,$(O_FILES))
+# The asset objects keep GCC's default emission order: the recipe table
+# (tools/psp/recipes.json) records their layout inside the asset region, and
+# reordering them would need `assets-recipes` to be regenerated.
+$(ASSET_OBJS): CFLAGS += -ftoplevel-reorder
 ELF_ASSETS   := $(BUILD_DIR)/mk64_assets.elf
 ASSETS_BIN   := $(BUILD_DIR)/assets.bin
 LINK_NOLOAD  := $(BUILD_DIR)/linkfile_noload.prx
