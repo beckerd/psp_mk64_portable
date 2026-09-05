@@ -646,7 +646,15 @@ static void gfx_scegu_set_depth_test(bool depth_test) {
     }
 }
 
+/* Depth writes as last requested (the GE starts with them enabled).  The
+ * frame-start clear has to turn them on and must put them back afterwards:
+ * the interpreter only sends a change, so a frame whose first z-tested draw
+ * expects writes off (Rainbow Road: the kart shadow, before the course is
+ * drawn) otherwise wrote the shadow's depth and the road under it then
+ * failed the depth test -- the black "box" under the kart (issue #10). */
+static bool gu_zupd = true;
 static void gfx_scegu_set_depth_mask(bool z_upd) {
+    gu_zupd = z_upd;
     sceGuDepthMask(!z_upd);
     GULOG("  gu: depthmask zupd %d\n", z_upd);
 }
@@ -839,7 +847,7 @@ static void gfx_scegu_start_frame(void) {
     sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
     sceGuEnable(GU_SCISSOR_TEST);
-    sceGuDepthMask(GU_FALSE);
+    sceGuDepthMask(!gu_zupd); // back to what the interpreter last asked for (see gfx_scegu_set_depth_mask)
 
     // Identity every frame? unsure.
     //sceGuSetMatrix(GU_PROJECTION, (const ScePspFMatrix4 *) identity_matrix);
