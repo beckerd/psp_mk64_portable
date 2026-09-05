@@ -19,6 +19,7 @@
 #include "cpu_vehicles_camera_path.h"
 #include "course.h"
 #include <stdio.h>
+#include <math.h>
 #ifdef PORT_COURSE_TEST
 #include <malloc.h>
 #include <pspsysmem.h>
@@ -137,6 +138,36 @@ void port_input_script(OSContPad* pad) {
         }
     }
 
+#ifdef PORT_STRAIGHT_RACE
+    /* Issue #10 neon signs: drop the kart onto the track a little before a
+     * sign, facing along the path (yaw: forward is (sin(-yaw), cos(-yaw)),
+     * 0x8000 = -z as on the start line).  The screenshots every 15 frames
+     * then show the sign as it is passed. */
+    if (gGamestate == RACING && gPlayerOne != NULL) {
+        static const struct { u32 frame; f32 x, y, z, dx, dz; const char* sign; } sWarps[] = {
+            { 1400, -3333.0f, 743.0f, 2211.0f, -0.18f, 0.98f, "DK" },
+            { 1500, -3310.0f, 743.0f, 2705.0f, 0.80f, 0.61f, "Yoshi" },
+            { 1600, 1184.0f, 999.0f, -5074.0f, 0.31f, 0.95f, "Luigi" },
+            { 1700, 1825.0f, 791.0f, 2149.0f, 0.61f, 0.79f, "Toad" },
+        };
+        u32 w;
+        for (w = 0; w < ARRAY_COUNT(sWarps); w++) {
+            if (sFrame == sWarps[w].frame) {
+                extern f32 get_surface_height(f32 posX, f32 posY, f32 posZ);
+                Player* p = gPlayerOne;
+                p->pos[0] = p->oldPos[0] = sWarps[w].x;
+                p->pos[2] = p->oldPos[2] = sWarps[w].z;
+                /* as spawn_player: land on the surface.  (Do not reset the collision mesh
+                 * indices to 5000 here: the kart then hangs the collision search.  The kart
+                 * usually still falls off after a warp -- the sign is visible either way.) */
+                p->pos[1] = p->oldPos[1] = get_surface_height(sWarps[w].x, sWarps[w].y + 50.0f, sWarps[w].z) + p->boundingBoxSize;
+                p->velocity[0] = p->velocity[1] = p->velocity[2] = 0.0f;
+                p->rotation[1] = (s16) (u16) (s32) (atan2f(-sWarps[w].dx, sWarps[w].dz) * (65536.0f / 6.2831853f));
+                PORT_LOG("script f%u: warp to %s sign approach (%.0f %.0f %.0f) yaw %d\n", sFrame, sWarps[w].sign, p->pos[0], p->pos[1], p->pos[2], p->rotation[1]);
+            }
+        }
+    }
+#endif
     if (gGamestate != sLastState || gMenuSelection != sLastMenu) {
         PORT_LOG("script f%u: gamestate %d menu %d (course %d)\n", sFrame, gGamestate, gMenuSelection,
                  gCurrentCourseId);
