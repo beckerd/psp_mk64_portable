@@ -57,6 +57,8 @@ fresh extraction on the next start (you lose the save in it).
 | R | R — hop / drift |
 | Triangle | C-up — look behind |
 | Start | Start / pause |
+| Select (tap) | C-right — cycle the race HUD: map, positions, speedometer |
+| L / R on the game select screen | Open OPTION / DATA (the N64 L and R) |
 | Hold Select for 3 seconds | Show or hide the FPS counter |
 
 ## Building from source
