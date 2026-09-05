@@ -826,7 +826,15 @@ static inline uint32_t hash_bytes(uint32_t h, const uint8_t *p, uint32_t n) {
 /* Hash the texels the render tile will read (plus the palette for CI
  * formats).  The game reuses buffers (menu textures, kart sprites, player
  * palettes) so the address alone does not identify a texture. */
-extern char _ftext[], _fbss[]; // linker: start of code, start of BSS
+extern char _ftext[], _fbss[];             // linker: start of code, start of BSS
+extern char __assets_start[], __assets_end[]; // linker: the ROM-derived asset region (after BSS)
+
+/* Texels the game never rewrites: code/data of the executable, or the asset
+ * region (ROM blobs, torch assets), which the linker places AFTER .bss. */
+static inline bool gfx_is_static_memory(const void *p) {
+    const char *c = (const char *) p;
+    return (c >= _ftext && c < _fbss) || (c >= __assets_start && c < __assets_end);
+}
 
 static uint32_t gfx_texture_content_hash(int tile, uint32_t fmt, uint32_t siz) {
     const uint8_t *src = rdp.loaded_texture[tile].addr;
@@ -844,9 +852,8 @@ static uint32_t gfx_texture_content_hash(int tile, uint32_t fmt, uint32_t siz) {
     // Texels inside the executable's text/data (ROM blobs, torch assets) never
     // change; only buffers in BSS / the game's pools need hashing.  A CI
     // texture still hashes a palette that lives in writable memory.
-    if ((const char *) src >= _ftext && (const char *) src < _fbss) {
-        if (fmt == G_IM_FMT_CI && rdp.palette != NULL &&
-            !((const char *) rdp.palette >= _ftext && (const char *) rdp.palette < _fbss)) {
+    if (gfx_is_static_memory(src)) {
+        if (fmt == G_IM_FMT_CI && rdp.palette != NULL && !gfx_is_static_memory(rdp.palette)) {
             return hash_bytes(h, rdp.palette, siz == G_IM_SIZ_4b ? 32 : 512);
         }
         return 1;
@@ -875,9 +882,25 @@ static uint32_t gfx_texture_content_hash(int tile, uint32_t fmt, uint32_t siz) {
 extern uint32_t port_time_us(void);
 extern void port_profile_add(int slot, uint32_t us);
 
+extern int texman_can_hold(unsigned int num, unsigned int bytes);
+
+/* Upper bound of the VRAM the backend needs for the render tile as uploaded
+ * (gfx_scegu_upload_texture pads to a power of two when it cannot swizzle). */
+static uint32_t gfx_texture_upload_bytes(uint32_t fmt, uint32_t siz) {
+    uint32_t width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
+    uint32_t height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
+    uint32_t bpp = ((fmt == G_IM_FMT_RGBA && siz == G_IM_SIZ_16b) || fmt == G_IM_FMT_CI) ? 2 : 4;
+    uint32_t pw = 1, ph = 1;
+    if (width * height > 8192) height = 8192 / (width ? width : 1);
+    while (pw < width) pw <<= 1;
+    while (ph < height) ph <<= 1;
+    return pw * ph * bpp;
+}
+
 static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, const uint8_t *orig_addr, uint32_t fmt, uint32_t siz) {
     size_t hash = (uintptr_t)orig_addr;
     uint32_t content_hash = gfx_texture_content_hash(tile, fmt, siz);
+    uint32_t upload_bytes = gfx_texture_upload_bytes(fmt, siz);
     struct TextureHashmapNode *stale = NULL;
     hash = (hash >> 5) & 0x3ff;
     struct TextureHashmapNode **node = &gfx_texture_cache.hashmap[hash];
@@ -891,8 +914,11 @@ static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, co
                 return true;
             }
             // Same buffer, new contents: its VRAM can be reused unless a draw
-            // queued this frame still needs the old texels.
-            if (stale == NULL && (*node)->last_used_frame != gfx_frame_counter) {
+            // queued this frame still needs the old texels, or the new image is
+            // bigger than the slot and the arena cannot grow it (then it goes
+            // through the fresh-texture path below, which may reset the arena).
+            if (stale == NULL && (*node)->last_used_frame != gfx_frame_counter &&
+                texman_can_hold((*node)->texture_id, upload_bytes)) {
                 stale = *node;
             }
         }
@@ -911,7 +937,7 @@ static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, co
         *n = stale;
         return false; // caller re-imports into the bound texture's memory
     }
-    if (!gfx_vram_space_available() ||
+    if (!gfx_vram_space_available() || !texman_can_hold((unsigned int) -1, upload_bytes) ||
         gfx_texture_cache.pool_pos == sizeof(gfx_texture_cache.pool) / sizeof(struct TextureHashmapNode)) {
         gfx_texture_cache_reset(true);
         node = &gfx_texture_cache.hashmap[hash];

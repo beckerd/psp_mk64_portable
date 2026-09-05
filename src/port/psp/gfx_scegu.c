@@ -308,23 +308,14 @@ static inline int texenv_set_texture(UNUSED struct ShaderProgram *prg) {
 }
 
 static inline int texenv_set_texture_color(struct ShaderProgram *prg) {
-    int mode;
-    /*@Hack: lord forgive me for this, but this is easier */
-    switch (prg->shader_id) {
-        case 0x0000038D: // mario's eyes
-        case 0x01045A00: // peach letter
-        case 0x01200A00: // intro copyright fade in
-            mode = GU_TFX_DECAL;
-            break;
-        case 0x00000551: // goddard
-            mode = GU_TFX_BLEND;
-            break;
-        default:
-            mode = GU_TFX_MODULATE;
-            break;
+    /* rgb = (TEXEL0 - input) * TEXEL0.a + input is a lerp by texel alpha, which
+     * is exactly the GE's DECAL function (shader 0x38D: kart shadows / decals
+     * over the shade).  Everything else is texel * vertex colour. */
+    const struct CCFeatures *cc = &prg->cc;
+    if (cc->c[0][0] == SHADER_TEXEL0 && cc->c[0][2] == SHADER_TEXEL0A && cc->do_mix[0]) {
+        return GU_TFX_DECAL;
     }
-
-    return mode;
+    return GU_TFX_MODULATE;
 }
 
 static inline int texenv_set_texture_texture(UNUSED struct ShaderProgram *prg) {
@@ -398,7 +389,9 @@ static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
                 break;
         }
 
-        /* Transition Screens */
+        /* Inherited from the sm64 PSP port (its transition screens); the id
+         * (texel * input rgb, texel alpha, blended) is reached by MK64 too and
+         * has always been drawn with the texel replacing the vertex colour. */
         if (prg->shader_id == 0x01A00045) {
             mode = GU_TFX_REPLACE;
         }

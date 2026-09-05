@@ -1,8 +1,4 @@
 #include <ultra64.h>
-#ifdef PORT_INPUT_SCRIPT
-#include <stdio.h>
-#include "port/port.h"
-#endif
 #include <macros.h>
 #include <common_structs.h>
 #include <defines.h>
@@ -1541,20 +1537,6 @@ void render_kart(Player* player, s8 playerId, s8 arg2, s8 flipOffset) {
         gDPSetRenderMode(gDisplayListHead++, G_RM_AA_ZB_TEX_EDGE, G_RM_AA_ZB_TEX_EDGE2);
     }
 
-#ifdef PORT_INPUT_SCRIPT
-    {
-        // Debug: dump the palette and index buffer the kart sprite is drawn from.
-        extern s32 gPortDumpKart;
-        if (gPortDumpKart && playerId == 0 && arg2 == 0) {
-            FILE* fp = fopen(port_save_path("kart_pal.bin"), "wb");
-            if (fp) { fwrite(gPlayerPalette, 1, 0x200, fp); fclose(fp); }
-            fp = fopen(port_save_path("kart_tex.bin"), "wb");
-            if (fp) { fwrite(sKartUpperTexture, 1, 64 * 63, fp); fclose(fp); }
-            PORT_LOG("kart dump: pal %p upper %p lower %p palIndex %d\n", gPlayerPalette, sKartUpperTexture, sKartLowerTexture, D_801651D0[arg2][playerId]);
-            gPortDumpKart = 0;
-        }
-    }
-#endif
     gDPLoadTextureBlock(gDisplayListHead++, sKartUpperTexture, G_IM_FMT_CI, G_IM_SIZ_8b, 64, 32, 0,
                         G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD,
                         G_TX_NOLOD);

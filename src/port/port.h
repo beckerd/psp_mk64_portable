@@ -64,8 +64,14 @@ const char* port_save_path(const char* name);
 void port_set_save_dir(const char* argv0);
 void port_fs_init(void);
 
-/* Dump the displayed frame to PORT_SAVE_DIR/shotNNN.ppm (debugging). */
+/* Debug builds only (psp_debug.c; no-ops otherwise): dump the displayed frame
+ * / z-buffer to data/shotNNN.ppm / depthNNN.ppm, backend self-test at boot,
+ * per-frame probes of the scripted run. */
 void port_screenshot(int index);
+void port_depthshot(int index);
+void port_debug_selftest(void);
+void port_debug_frame_begin(u32 frame);
+void port_debug_frame_end(u32 frame);
 
 /* Logging (goes to stdout / psplink / a file depending on the backend). */
 void port_log(const char* fmt, ...);

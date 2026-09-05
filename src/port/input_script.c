@@ -72,7 +72,6 @@ static const ScriptStep sSteps[] = {
 #define SCRIPT_END 3300
 #define SHOT_EVERY 120
 
-s32 gPortDumpKart = 0;
 #ifdef PORT_COURSE_TEST
 s32 gPortForceCourse = -1;
 #endif
@@ -144,9 +143,6 @@ void port_input_script(OSContPad* pad) {
         FILE* fp = fopen(port_save_path("pal_p1.bin"), "wb");
         if (fp) { fwrite(&gPlayerPalettesList[0], 1, 0x200, fp); fclose(fp); }
         PORT_LOG("script: palette dumped, gPlayerPalettesList at %p\n", &gPlayerPalettesList[0]);
-    }
-    if (sFrame == 2040) {
-        gPortDumpKart = 1;
     }
     if (sFrame == 480) {
         extern u16* gMenuTextureBuffer;

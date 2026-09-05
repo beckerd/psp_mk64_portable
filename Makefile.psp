@@ -314,46 +314,11 @@ $(EBOOT): $(PRX) $(BUILD_DIR)/PARAM.SFO $(DATA_PSAR) $(wildcard icon/MK64-ICON0.
 	@ls -lh $@
 
 # ---------------------------------------------------------------------------
-# Release mastering (recipe carried over from the Tetralumen project, where it
-# was byte-matched against a homebrew ISO that boots on real ARK-4 hardware):
-#   * EBOOT.BIN is the plain UNSIGNED relocatable .prx -- ARK-4 loads it as is.
-#   * the image is written by tools/psp/make_iso.py, not mkisofs (no ";1" name
-#     suffixes, sane extents for the empty BOOT.BIN/OPNSSMP.BIN placeholders,
-#     the disc-id string in the PVD application area).
-#   * PARAM.SFO from tools/psp/make_sfo.py (sorted keys + DISC_NUMBER/TOTAL);
-#     UMD_DATA.BIN is the exact 48-byte layout.
-# The FPS overlay is off by default and toggled by holding SELECT for 3 s, so
-# release builds keep it; `gmake -f Makefile.psp release` does a clean rebuild
-# into release/, then rebuilds the normal dev EBOOT.
-ISO_ROOT    := $(BUILD_DIR)/iso_root
-RELEASE_DIR := release
-DISC_ID     := MKPS00001
-DISC_ID_DASH:= MKPS-00001
-ISO_VOLID   := MK64PORTABLE
-
-# $(1) = .iso path
-define BUILD_ISO
-	rm -rf $(ISO_ROOT) $(1)
-	mkdir -p $(ISO_ROOT)/PSP_GAME/SYSDIR $(ISO_ROOT)/PSP_GAME/USRDIR $(dir $(1))
-	python3 tools/psp/make_sfo.py --title '$(PSP_EBOOT_TITLE)' --disc-id $(DISC_ID) $(ISO_ROOT)/PSP_GAME/PARAM.SFO
-	cp $(PRX) $(ISO_ROOT)/PSP_GAME/SYSDIR/EBOOT.BIN
-	: > $(ISO_ROOT)/PSP_GAME/SYSDIR/BOOT.BIN
-	: > $(ISO_ROOT)/PSP_GAME/SYSDIR/OPNSSMP.BIN
-	cp icon/MK64-ICON0.png $(ISO_ROOT)/PSP_GAME/ICON0.PNG
-	cp icon/MK64-PIC1.png $(ISO_ROOT)/PSP_GAME/PIC1.PNG
-	cp $(ASSETS_BIN) $(ISO_ROOT)/PSP_GAME/USRDIR/assets.bin
-	python3 tools/psp/make_umd_data.py $(DISC_ID_DASH) $(ISO_ROOT)/UMD_DATA.BIN
-	python3 tools/psp/make_iso.py --volid $(ISO_VOLID) --disc-id $(DISC_ID_DASH) -o $(1) $(ISO_ROOT)
-	rm -rf $(ISO_ROOT)
-	@ls -lh $(1)
-endef
-
-# iso: a test disc of the CURRENT build (whatever flags it has) in build/psp
-iso: all $(ASSETS_BIN)
-	$(call BUILD_ISO,$(BUILD_DIR)/mk64.iso)
-
 # release: clean build -> release/MK64Portable/ (EBOOT.PBP + README.txt), the
 # folder players drop into ms0:/PSP/GAME/, zipped as release/MK64Portable-<ver>.zip.
+# The FPS overlay is off by default and toggled by holding SELECT for 3 s, so
+# release builds keep it.  The dev EBOOT in build/psp is the same build.
+RELEASE_DIR := release
 RELEASE_VERSION ?= dev
 release:
 	$(MAKE) -f Makefile.psp clean
@@ -365,7 +330,7 @@ release:
 	(cd $(RELEASE_DIR) && (md5 MK64Portable/EBOOT.PBP || md5sum MK64Portable/EBOOT.PBP) > MD5SUMS.txt && rm -f MK64Portable-$(RELEASE_VERSION).zip && zip -q -r MK64Portable-$(RELEASE_VERSION).zip MK64Portable)
 	@ls -lh $(RELEASE_DIR) $(RELEASE_DIR)/MK64Portable
 
-.PHONY: iso release
+.PHONY: release
 
 -include $(DEP_FILES)
 

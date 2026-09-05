@@ -103,9 +103,12 @@ static void emit_xformed(u8* dst, const u8* src, u32 size, u16 xf) {
 }
 
 /* ------------------------------------------------------------------ crc */
+/* Standard CRC-32 (same as zlib's crc32(), incrementally: start from 0). */
 static u32 crc_table[256];
-static void crc_init(void) { u32 i, j; for (i = 0; i < 256; i++) { u32 c = i; for (j = 0; j < 8; j++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1; crc_table[i] = c; } }
+static int crc_ready;
+static void crc_init(void) { u32 i, j; if (crc_ready) return; crc_ready = 1; for (i = 0; i < 256; i++) { u32 c = i; for (j = 0; j < 8; j++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1; crc_table[i] = c; } }
 static u32 crc_update(u32 crc, const u8* b, u32 n) { u32 i; crc = ~crc; for (i = 0; i < n; i++) crc = crc_table[(crc ^ b[i]) & 0xFF] ^ (crc >> 8); return ~crc; }
+u32 port_crc32(u32 crc, const void* b, u32 n) { crc_init(); return crc_update(crc, (const u8*) b, n); }
 
 /* ------------------------------------------------------------------ recipe blob */
 static const PortAssetBlobHeader* sH;
@@ -330,16 +333,17 @@ int port_assets_generate(const char* dir, const char* rom_path, void (*progress)
     return 1;
 }
 
-/* Write the cache in assets_load.c's format: pointer words hold link-time values. */
+/* Write the cache in assets_load.c's format: pointer words hold link-time
+ * values, and the header carries the CRC-32 of the data (checked on load). */
 int port_assets_write_cache(const char* path, char* err, u32 errlen) {
     u32 base = (u32) _ftext, region_size = (u32) (__assets_end - __assets_start);
-    u32 hdr[11]; u32 i, off = 0, ri = 0, hdrlen;
+    u32 hdr[11]; u32 i, off = 0, ri = 0, hdrlen, crc = 0;
     FILE* f = fopen(path, "wb");
     static u8 chunk[64 * 1024];
     if (f == NULL) { snprintf(err, errlen, "cannot create %s", path); return 0; }
     memcpy(hdr, "MK64ASST", 8);
     hdr[2] = 1; hdr[3] = (u32) __assets_start - base; hdr[4] = region_size; hdr[5] = sH->reloc_count;
-    hdr[6] = 0; hdr[7] = 0; hdr[8] = 0; hdr[9] = 0; hdr[10] = 0;
+    hdr[6] = 0; hdr[7] = 0; hdr[8] = 0; hdr[9] = 0; hdr[10] = 0; /* data_crc (hdr[9]) is patched in at the end */
     fwrite(hdr, 1, 44, f);
     for (i = 0; i < sH->reloc_count; i++) { u32 o = sRelocs[i].off & 0x7FFFFFFFu; fwrite(&o, 4, 1, f); }
     hdrlen = 44 + sH->reloc_count * 4;
@@ -353,9 +357,12 @@ int port_assets_write_cache(const char* path, char* err, u32 errlen) {
             memcpy(chunk + o, &v, 4);
             ri++;
         }
+        crc = port_crc32(crc, chunk, n);
         if (fwrite(chunk, 1, n, f) != n) { snprintf(err, errlen, "write failed (memory stick full?)"); fclose(f); remove(path); return 0; }
         off += n;
     }
-    fclose(f);
+    fseek(f, 9 * 4, SEEK_SET);
+    fwrite(&crc, 4, 1, f);
+    if (fclose(f) != 0) { snprintf(err, errlen, "write failed (memory stick full?)"); remove(path); return 0; }
     return 1;
 }

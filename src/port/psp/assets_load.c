@@ -21,6 +21,7 @@ struct AssetHeader {
     char magic[8];
     u32 version, region_addr, region_size, reloc_count, sym_count, names_size, build_id, data_crc, pad;
 };
+extern u32 port_crc32(u32 crc, const void* b, u32 n);
 
 static int try_load(const char* path, char* err, u32 errlen) {
     struct AssetHeader h;
@@ -53,21 +54,38 @@ static int try_load(const char* path, char* err, u32 errlen) {
             fclose(f);
             return 0;
         }
+        /* Every relocated word must lie inside the region, 4-byte aligned. */
+        for (i = 0; i < h.reloc_count; i++) {
+            if ((rl[i] & 3) != 0 || rl[i] + 4 > h.region_size) {
+                snprintf(err, errlen, "corrupt (reloc %u at %08X)", (unsigned) i, (unsigned) rl[i]);
+                fclose(f);
+                return 0;
+            }
+        }
         hdrlen = sizeof(h) + h.reloc_count * 4 + h.sym_count * 16 + h.names_size;
         hdrlen = (hdrlen + 15) & ~15u;
         fseek(f, hdrlen, SEEK_SET);
-        for (done = 0; done < h.region_size;) {
-            u32 want = h.region_size - done;
-            size_t got;
-            if (want > 512 * 1024) want = 512 * 1024;
-            got = fread(__assets_start + done, 1, want, f);
-            if (got == 0) break;
-            done += got;
-        }
-        fclose(f);
-        if (done != h.region_size) {
-            snprintf(err, errlen, "truncated (%u of %u bytes)", (unsigned) done, (unsigned) h.region_size);
-            return 0;
+        {
+            u32 crc = 0;
+            for (done = 0; done < h.region_size;) {
+                u32 want = h.region_size - done;
+                size_t got;
+                if (want > 512 * 1024) want = 512 * 1024;
+                got = fread(__assets_start + done, 1, want, f);
+                if (got == 0) break;
+                if (h.data_crc != 0) crc = port_crc32(crc, __assets_start + done, (u32) got);
+                done += got;
+            }
+            fclose(f);
+            if (done != h.region_size) {
+                snprintf(err, errlen, "truncated (%u of %u bytes)", (unsigned) done, (unsigned) h.region_size);
+                return 0;
+            }
+            /* data_crc == 0: a cache from a build that did not record it */
+            if (h.data_crc != 0 && crc != h.data_crc) {
+                snprintf(err, errlen, "corrupt (crc %08X, expected %08X)", (unsigned) crc, (unsigned) h.data_crc);
+                return 0;
+            }
         }
         for (i = 0; i < h.reloc_count; i++) {
             *(u32*) (__assets_start + rl[i]) += base;

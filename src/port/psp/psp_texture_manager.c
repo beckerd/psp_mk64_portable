@@ -27,7 +27,7 @@ static void *psp_tex_buffer_start = NULL;
 static void *psp_tex_buffer_max = NULL;
 /* Overflow arena in main RAM: the GE reads textures from RAM too (slower),
  * and menu frames need more than the VRAM arena holds. */
-#define TEXMAN_RAM_SIZE (1 * 1024 * 1024) /* overflow arena (trimmed 2MB->1MB for PSP-1000 RAM) */
+#define TEXMAN_RAM_SIZE (2 * 1024 * 1024) /* overflow arena (the shrunk N64 framebuffers and debug buffers pay for it on a PSP-1000) */
 #define TEXMAN_NO_RAM 0
 static unsigned char psp_tex_ram[TEXMAN_RAM_SIZE] __attribute__((aligned(64)));
 static unsigned char *psp_tex_ram_ptr = psp_tex_ram;
@@ -175,8 +175,13 @@ struct PSP_Texture *texman_reserve_memory(int width, int height, unsigned int ty
         current->location = psp_tex_ram_ptr;
         psp_tex_ram_ptr += tex_size;
     } else {
-        current->location = psp_tex_buffer; // out of memory: the caller checked gfx_vram_space_available()
-        psp_tex_buffer = (void *) ((unsigned char *) psp_tex_buffer + tex_size);
+        /* Out of memory.  The caller is expected to have checked
+         * texman_can_hold() / gfx_vram_space_available() first; if it did not,
+         * overwrite the START of the VRAM arena (a visible glitch on whatever
+         * texture lived there) rather than write past the arena's end. */
+        static int warned;
+        if (!warned) { warned = 1; port_log("texman: arena overflow (%u bytes), reusing arena start\n", tex_size); }
+        current->location = psp_tex_buffer_start;
     }
     current->alloc_size = tex_size;
     if (gfx_debug_frame) {
@@ -192,6 +197,17 @@ int texman_usage_percent(void) {
     unsigned int mem = total ? used * 100u / total : 100u;
     unsigned int slots = psp_tex_number * 100u / (sizeof(textures) / sizeof(textures[0]));
     return (int) (mem > slots ? mem : slots);
+}
+
+/* Can `bytes` be uploaded into texture `num` without growing past the arenas:
+ * either its current allocation is big enough, or a fresh one fits. */
+int texman_can_hold(unsigned int num, unsigned int bytes) {
+    unsigned int tex_size = (bytes + TEX_ALIGNMENT - 1) & ~(TEX_ALIGNMENT - 1);
+    if (num < sizeof(textures) / sizeof(textures[0]) && textures[num].location != NULL && textures[num].alloc_size >= tex_size) {
+        return 1;
+    }
+    return ((unsigned char *) psp_tex_buffer_max - (unsigned char *) psp_tex_buffer) >= (int) tex_size ||
+           (!TEXMAN_NO_RAM && psp_tex_ram + TEXMAN_RAM_SIZE - psp_tex_ram_ptr >= (int) tex_size);
 }
 
 int texman_slots_available(void) {

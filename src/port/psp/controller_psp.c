@@ -9,7 +9,7 @@
  *   Triangle         -> C-up (look behind)
  *   D-pad            -> D-pad
  *   Start            -> Start
- *   Select           -> L
+ *   Select (hold 3s) -> toggle the FPS counter (not passed to the game)
  */
 #include <ultra64.h>
 #include <pspctrl.h>
@@ -74,9 +74,6 @@ void controller_psp_read(OSContPad* pad) {
     }
     if (d.Buttons & PSP_CTRL_TRIANGLE) {
         b |= U_CBUTTONS;
-    }
-    if (d.Buttons & PSP_CTRL_SELECT) {
-        b |= L_TRIG;
     }
     if (d.Buttons & PSP_CTRL_START) {
         b |= START_BUTTON;

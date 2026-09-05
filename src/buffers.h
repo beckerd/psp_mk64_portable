@@ -83,7 +83,15 @@ extern struct_D_802F1F80 gPlayerPalettesList[2][4][8];
 #else
 extern u16 gPlayerPalettesList[][4][0x100 * 8];
 #endif
-extern u16 gZBuffer[SCREEN_WIDTH * SCREEN_HEIGHT];
+#ifdef TARGET_PSP
+/* The port renders with the GE straight into VRAM; the N64 framebuffers and
+ * z-buffer are only ever used as addresses (gDPSetColorImage/gDPSetDepthImage),
+ * so they are shrunk to a few texels (about 600 KB saved on a PSP-1000). */
+#define PORT_N64_FB_TEXELS 16
+#else
+#define PORT_N64_FB_TEXELS (SCREEN_WIDTH * SCREEN_HEIGHT)
+#endif
+extern u16 gZBuffer[PORT_N64_FB_TEXELS];
 
 // NOTE: This UB fix from sm64 implemented in mk64,
 // in-case it has the same issue.
@@ -93,14 +101,14 @@ extern u16 gZBuffer[SCREEN_WIDTH * SCREEN_HEIGHT];
 // -g codegen implies that they are separate variables. This is impossible to
 // reconcile without undefined behavior. Avoid that when possible.
 #ifdef AVOID_UB
-extern u16 gFramebuffers[3][SCREEN_WIDTH * SCREEN_HEIGHT];
+extern u16 gFramebuffers[3][PORT_N64_FB_TEXELS];
 #define gFramebuffer0 gFramebuffers[0]
 #define gFramebuffer1 gFramebuffers[1]
 #define gFramebuffer2 gFramebuffers[2]
 #else
-extern u16 gFramebuffer0[SCREEN_WIDTH * SCREEN_HEIGHT];
-extern u16 gFramebuffer1[SCREEN_WIDTH * SCREEN_HEIGHT];
-extern u16 gFramebuffer2[SCREEN_WIDTH * SCREEN_HEIGHT];
+extern u16 gFramebuffer0[PORT_N64_FB_TEXELS];
+extern u16 gFramebuffer1[PORT_N64_FB_TEXELS];
+extern u16 gFramebuffer2[PORT_N64_FB_TEXELS];
 #endif
 
 #endif // BUFFERS_H

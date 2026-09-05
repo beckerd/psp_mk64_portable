@@ -81,7 +81,7 @@ tools/torch/cmake-build-release/torch header baserom.us.z64
 # the PSP build
 export PATH="$HOME/pspdev/bin:$PATH"
 gmake -f Makefile.psp -j8            # -> build/psp/EBOOT.PBP
-gmake -f Makefile.psp release        # clean build with a player README -> release/EBOOT.PBP
+gmake -f Makefile.psp release        # clean build + player README -> release/MK64Portable/ and its zip
 ```
 
 Run the result in PPSSPP or on a PSP exactly like a release: put a ROM next to
