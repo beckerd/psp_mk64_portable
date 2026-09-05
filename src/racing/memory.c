@@ -1,4 +1,8 @@
 #include <ultra64.h>
+#ifdef PORT_INPUT_SCRIPT
+#include <stdio.h>
+#include "port/port.h"
+#endif
 #include <PR/ultratypes.h>
 #include <macros.h>
 #include <common_structs.h>
@@ -1445,7 +1449,13 @@ u8* load_course(s32 courseId) {
     set_segment_base_addr(7, NULL);
     PORT_LOG(" vertices ok (%d), textures %p\n", vertexCount, textures);
     decompress_textures(textures);
-    PORT_LOG(" textures ok\n");
+    PORT_LOG(" textures ok (segment 5 at %08X)\n", (unsigned) gSegmentTable[5]);
+#ifdef PORT_INPUT_SCRIPT
+    { /* Debug: dump the decoded course textures (issue #1) */
+        FILE* fp = fopen(port_save_path("seg5.bin"), "wb");
+        if (fp) { fwrite((void*) gSegmentTable[5], 1, 0x18000, fp); fclose(fp); }
+    }
+#endif
     gNextFreeMemoryAddress = prevLoadedAddress_saved;
     return (u8*) vertexStart;
 #endif

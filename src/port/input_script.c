@@ -132,7 +132,7 @@ void port_input_script(OSContPad* pad) {
         sLastState = gGamestate;
         sLastMenu = gMenuSelection;
     }
-    if (((sFrame % SHOT_EVERY) == 0 && sFrame >= 240) || sFrame == 450 /* top-level game select: OPTION/DATA */ ||
+    if (((sFrame % SHOT_EVERY) == 0 && sFrame >= 240) || sFrame == 450 /* top-level game select: OPTION/DATA */ || sFrame == 1202 /* the frame traced at 1201 */ ||
         (sFrame >= 1380 && sFrame <= 1700 && (sFrame % 30) == 0)) {
         port_screenshot((int) sFrame);
         if (gGamestate == RACING && gPlayerOne != NULL) {
@@ -153,6 +153,14 @@ void port_input_script(OSContPad* pad) {
         if (fp) { fwrite(gMenuTextureBuffer, 1, 320 * 240 * 2, fp); fclose(fp); }
         PORT_LOG("script: menu buffer dumped from %p\n", gMenuTextureBuffer);
     }
+#ifdef PORT_COURSE_TEST
+    if (sFrame == 1201 && gPortForceCourse >= 0) {
+        // One traced race frame on the forced course (issue #1: Moo Moo Farm road patches).
+        extern int gfx_debug_frame, gfx_trace_frames;
+        gfx_debug_frame = 1;
+        gfx_trace_frames = 1;
+    }
+#endif
     if (sFrame == 481) {
         // One fully traced frame of the game-select screen (issue #5: the
         // GAME SELECT banner and the OPTION/DATA buttons do not draw).
