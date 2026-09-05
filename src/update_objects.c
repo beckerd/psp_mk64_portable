@@ -7807,9 +7807,25 @@ void func_80085F74(s32 objectIndex) {
 }
 
 void func_80086074(s32 objectIndex, s32 arg1) {
+#ifdef TARGET_PSP
+    /* The N64 indexes past the Peach palette into the six that follow it in
+     * ROM order.  The port's asset objects keep GCC's own emission order
+     * (reversed), so walk an explicit table instead: with the walk, every
+     * sign after Peach (Luigi, DK, Yoshi, Bowser, Wario, Toad) drew with the
+     * Boo palettes and came out as coloured noise (issue #10). */
+    extern u16 d_tlut_rainbow_road_neon_luigi[], d_tlut_rainbow_road_neon_dk[], d_tlut_rainbow_road_neon_yoshi[],
+        d_tlut_rainbow_road_neon_bowser[], d_tlut_rainbow_road_neon_wario[], d_tlut_rainbow_road_neon_toad[];
+    static u16* const sNeonTluts[7] = {
+        d_course_rainbow_road_static_tluts, d_tlut_rainbow_road_neon_luigi, d_tlut_rainbow_road_neon_dk,
+        d_tlut_rainbow_road_neon_yoshi,     d_tlut_rainbow_road_neon_bowser, d_tlut_rainbow_road_neon_wario,
+        d_tlut_rainbow_road_neon_toad,
+    };
+    u16* tlut = sNeonTluts[arg1 % 7];
+#else
+    u16* tlut = &d_course_rainbow_road_static_tluts[arg1 * 256];
+#endif
     set_obj_origin_pos(objectIndex, D_800E6734[arg1 * 3 + 0] * xOrientation, D_800E6734[arg1 * 3 + 1], D_800E6734[arg1 * 3 + 2]);
-    init_texture_object(objectIndex, &d_course_rainbow_road_static_tluts[arg1 * 256],
-                        &d_course_rainbow_road_static_textures[arg1], 64, 64);
+    init_texture_object(objectIndex, (u8*) tlut, &d_course_rainbow_road_static_textures[arg1], 64, 64);
     func_80085BB4(objectIndex);
 }
 
