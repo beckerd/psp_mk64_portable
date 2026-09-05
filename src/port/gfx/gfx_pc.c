@@ -124,6 +124,7 @@ struct TextureHashmapNode {
     uint32_t texture_id;
     uint8_t cms, cmt;
     bool linear_filter;
+    uint8_t mirror; // texels imported doubled with the mirrored copy: bit 0 along S, bit 1 along T
 } __attribute__((packed, aligned(4)));
 static struct {
     struct TextureHashmapNode *hashmap[1024];
@@ -253,6 +254,7 @@ static struct {
     int color_mode;                        // 0 copy shade, 1 constant, 2 general
     bool alpha_255;                        // copy mode: alpha forced to 255
     bool needs_lod;
+    uint8_t mirror;                        // the bound texture was imported doubled (see gfx_mirror_flags)
     struct RGBA const_color;
 } tri_state;
 
@@ -892,26 +894,45 @@ extern int texman_can_hold(unsigned int num, unsigned int bytes);
 
 /* Upper bound of the VRAM the backend needs for the render tile as uploaded
  * (gfx_scegu_upload_texture pads to a power of two when it cannot swizzle). */
-static uint32_t gfx_texture_upload_bytes(uint32_t fmt, uint32_t siz) {
+/* Mirrored wrap (G_TX_MIRROR) is not a GE texture mode.  Such textures are
+ * imported at twice the size with the mirrored copy baked in, and the GE then
+ * repeats (MIRROR|WRAP) or clamps (MIRROR|CLAMP) the doubled image; the UV
+ * scale accounts for the doubling.  Returns the doubling that fits the
+ * import buffer (bit 0: S, bit 1: T); 0 falls back to plain repeat. */
+#define GFX_MAX_IMPORT_TEXELS 8192
+#define GFX_MAX_MIRROR_TEXELS 16384
+static uint8_t gfx_mirror_flags(uint32_t width, uint32_t height) {
+    uint8_t m = 0;
+    if (rdp.texture_tile.cms & G_TX_MIRROR) m |= 1;
+    if (rdp.texture_tile.cmt & G_TX_MIRROR) m |= 2;
+    if (m != 0 && (width << (m & 1)) * (height << ((m >> 1) & 1)) > GFX_MAX_MIRROR_TEXELS) {
+        m = 0;
+    }
+    return m;
+}
+
+static uint32_t gfx_texture_upload_bytes(uint32_t fmt, uint32_t siz, uint8_t mirror) {
     uint32_t width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
     uint32_t height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
     uint32_t bpp = ((fmt == G_IM_FMT_RGBA && siz == G_IM_SIZ_16b) || fmt == G_IM_FMT_CI) ? 2 : 4;
     uint32_t pw = 1, ph = 1;
-    if (width * height > 8192) height = 8192 / (width ? width : 1);
+    if (width * height > GFX_MAX_IMPORT_TEXELS) height = GFX_MAX_IMPORT_TEXELS / (width ? width : 1);
+    width <<= mirror & 1;
+    height <<= (mirror >> 1) & 1;
     while (pw < width) pw <<= 1;
     while (ph < height) ph <<= 1;
     return pw * ph * bpp;
 }
 
-static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, const uint8_t *orig_addr, uint32_t fmt, uint32_t siz) {
+static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, const uint8_t *orig_addr, uint32_t fmt, uint32_t siz, uint8_t mirror) {
     size_t hash = (uintptr_t)orig_addr;
     uint32_t content_hash = gfx_texture_content_hash(tile, fmt, siz);
-    uint32_t upload_bytes = gfx_texture_upload_bytes(fmt, siz);
+    uint32_t upload_bytes = gfx_texture_upload_bytes(fmt, siz, mirror);
     struct TextureHashmapNode *stale = NULL;
     hash = (hash >> 5) & 0x3ff;
     struct TextureHashmapNode **node = &gfx_texture_cache.hashmap[hash];
     while (*node != NULL && *node - gfx_texture_cache.pool < (int)gfx_texture_cache.pool_pos) {
-        if ((*node)->texture_addr == orig_addr && (*node)->fmt == fmt && (*node)->siz == siz) {
+        if ((*node)->texture_addr == orig_addr && (*node)->fmt == fmt && (*node)->siz == siz && (*node)->mirror == mirror) {
             if ((*node)->content_hash == content_hash) {
                 gfx_rapi->select_texture(tile, (*node)->texture_id);
                 gfx_rapi->set_sampler_parameters(0, (*node)->linear_filter, (*node)->cms, (*node)->cmt);
@@ -961,6 +982,7 @@ static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, co
     (*node)->texture_addr = orig_addr;
     (*node)->fmt = fmt;
     (*node)->siz = siz;
+    (*node)->mirror = mirror;
     (*node)->content_hash = content_hash;
     (*node)->last_used_frame = gfx_frame_counter;
     *n = *node;
@@ -1051,8 +1073,34 @@ static inline uint16_t n64_rgba16_to_psp5551(uint16_t col16) {
     return (uint16_t) ((a << 15) | (b << 10) | (g << 5) | r);
 }
 
-static void import_texture_any(int tile) {
-    static uint32_t out32[8192] __attribute__((aligned(16)));
+/* Upload `buf` (w x h texels of `bpp` bytes), doubled along the mirrored
+ * axes with the mirrored copy baked in when `mirror` asks for it. */
+static void gfx_upload_maybe_mirrored(const void *buf, uint32_t w, uint32_t h, uint32_t bpp, unsigned int type, uint8_t mirror) {
+    static uint32_t mirror32[GFX_MAX_MIRROR_TEXELS] __attribute__((aligned(16)));
+    uint32_t w2, h2, x, y;
+    if (mirror == 0) {
+        gfx_rapi->upload_texture((const uint8_t *) buf, w, h, type);
+        return;
+    }
+    w2 = w << (mirror & 1);
+    h2 = h << ((mirror >> 1) & 1);
+    for (y = 0; y < h2; y++) {
+        uint32_t sy = y < h ? y : 2 * h - 1 - y;
+        if (bpp == 2) {
+            const uint16_t *src = (const uint16_t *) buf + sy * w;
+            uint16_t *dst = (uint16_t *) mirror32 + y * w2;
+            for (x = 0; x < w2; x++) dst[x] = src[x < w ? x : 2 * w - 1 - x];
+        } else {
+            const uint32_t *src = (const uint32_t *) buf + sy * w;
+            uint32_t *dst = mirror32 + y * w2;
+            for (x = 0; x < w2; x++) dst[x] = src[x < w ? x : 2 * w - 1 - x];
+        }
+    }
+    gfx_rapi->upload_texture((const uint8_t *) mirror32, w2, h2, type);
+}
+
+static void import_texture_any(int tile, uint8_t mirror) {
+    static uint32_t out32[GFX_MAX_IMPORT_TEXELS] __attribute__((aligned(16)));
     uint16_t* out16 = (uint16_t*) out32;
     uint8_t fmt = rdp.texture_tile.fmt;
     uint8_t siz = rdp.texture_tile.siz;
@@ -1073,9 +1121,9 @@ static void import_texture_any(int tile) {
     if (stride == 0) {
         stride = tex_bytes_per_row(width, siz);
     }
-    if (width * height > 8192) {
-        SUPPORT_CHECK(width * height <= 8192);
-        height = 8192 / width;
+    if (width * height > GFX_MAX_IMPORT_TEXELS) {
+        SUPPORT_CHECK(width * height <= GFX_MAX_IMPORT_TEXELS);
+        height = GFX_MAX_IMPORT_TEXELS / width;
     }
     if (gfx_debug_frame) port_log("  import fmt %d siz %d %ux%u stride %u addr %p\n", fmt, siz, width, height, stride, src);
 
@@ -1086,7 +1134,7 @@ static void import_texture_any(int tile) {
                 out16[y * width + x] = n64_rgba16_to_psp5551(be16(row + x * 2));
             }
         }
-        gfx_rapi->upload_texture((const uint8_t*) out16, width, height, GU_PSM_5551);
+        gfx_upload_maybe_mirrored(out16, width, height, 2, GU_PSM_5551, mirror);
         gfx_debug_dump_texture(out16, NULL, width, height, fmt, siz, src);
 #ifdef PORT_INPUT_SCRIPT
         if (gfx_dump_textures && width == 32 && height == 32 && !gDebugTex32Valid) {
@@ -1106,7 +1154,7 @@ static void import_texture_any(int tile) {
                 out16[y * width + x] = n64_rgba16_to_psp5551(be16(rdp.palette + idx * 2));
             }
         }
-        gfx_rapi->upload_texture((const uint8_t*) out16, width, height, GU_PSM_5551);
+        gfx_upload_maybe_mirrored(out16, width, height, 2, GU_PSM_5551, mirror);
 #ifdef PORT_INPUT_SCRIPT
         if (gfx_dump_textures && width == 64 && height == 32 && siz == G_IM_SIZ_8b && gDebugKartTexCount < 2) {
             memcpy(gDebugKartTex[gDebugKartTexCount++], out16, 64 * 32 * 2);
@@ -1160,7 +1208,7 @@ static void import_texture_any(int tile) {
             out32[y * width + x] = (uint32_t) r | ((uint32_t) g << 8) | ((uint32_t) b << 16) | ((uint32_t) a << 24);
         }
     }
-    gfx_rapi->upload_texture((const uint8_t*) out32, width, height, GU_PSM_8888);
+    gfx_upload_maybe_mirrored(out32, width, height, 4, GU_PSM_8888, mirror);
     gfx_debug_dump_texture(NULL, out32, width, height, fmt, siz, src);
 }
 
@@ -1177,10 +1225,11 @@ static void import_texture(int tile) {
     if (width == 0 || height == 0 || width > 1024 || height > 1024) {
         return;
     }
-    if (gfx_texture_cache_lookup(tile, &rendering_state.textures[tile], rdp.loaded_texture[tile].addr, fmt, siz)) {
+    uint8_t mirror = gfx_mirror_flags(width, height);
+    if (gfx_texture_cache_lookup(tile, &rendering_state.textures[tile], rdp.loaded_texture[tile].addr, fmt, siz, mirror)) {
         return;
     }
-    import_texture_any(tile);
+    import_texture_any(tile, mirror);
 }
 
 static inline float dot(const float a[3], const float b[3])
@@ -1778,6 +1827,11 @@ static void gfx_tri_rebuild_state(struct LoadedVertex *v1) {
         // ignores it -- why the emulator never crashed).  Clamp to >= 1 texel.
         if (tex_width < 1.0f) tex_width = 1.0f;
         if (tex_height < 1.0f) tex_height = 1.0f;
+        // A mirrored texture was imported at twice the size: one period of the
+        // mirror pattern is the whole doubled image.
+        tri_state.mirror = rendering_state.textures[0] != NULL ? rendering_state.textures[0]->mirror : 0;
+        if (tri_state.mirror & 1) tex_width *= 2.0f;
+        if (tri_state.mirror & 2) tex_height *= 2.0f;
         float filt = ((rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT) ? 0.5f : 0.0f;
         float inv_w = 1.0f / tex_width, inv_h = 1.0f / tex_height;
         tri_state.u_scale = inv_w / 32.0f;
@@ -1911,8 +1965,9 @@ static void gfx_emit_triangle(const struct LoadedVertex *a, const struct LoadedV
             if (first[i].v < minv) minv = first[i].v;
         }
         {
-            float offu = (rdp.texture_tile.cms & G_TX_CLAMP) ? 0.0f : (rdp.texture_tile.cms & G_TX_MIRROR) ? 2.0f * floorf(minu * 0.5f) : floorf(minu);
-            float offv = (rdp.texture_tile.cmt & G_TX_CLAMP) ? 0.0f : (rdp.texture_tile.cmt & G_TX_MIRROR) ? 2.0f * floorf(minv * 0.5f) : floorf(minv);
+            // (a doubled mirrored texture has period 1 in normalised units, like a plain repeat)
+            float offu = (rdp.texture_tile.cms & G_TX_CLAMP) ? 0.0f : ((rdp.texture_tile.cms & G_TX_MIRROR) && !(tri_state.mirror & 1)) ? 2.0f * floorf(minu * 0.5f) : floorf(minu);
+            float offv = (rdp.texture_tile.cmt & G_TX_CLAMP) ? 0.0f : ((rdp.texture_tile.cmt & G_TX_MIRROR) && !(tri_state.mirror & 2)) ? 2.0f * floorf(minv * 0.5f) : floorf(minv);
             if (offu != 0.0f || offv != 0.0f) {
                 for (i = 0; i < 3; i++) {
                     first[i].u -= offu;
