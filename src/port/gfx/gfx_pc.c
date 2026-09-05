@@ -3503,6 +3503,7 @@ void gfx_run(Gfx *commands) {
         gfx_trace_frames--;
         port_log("dl done\n");
     }
+    gfx_debug_frame = 0; // a one-frame switch (set by the input script / debug hooks before the frame)
     gfx_flush();
     {
         extern void port_gfx_overlay(void);
