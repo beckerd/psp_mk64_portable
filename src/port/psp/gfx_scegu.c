@@ -392,12 +392,10 @@ static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
                 break;
         }
 
-        /* Inherited from the sm64 PSP port (its transition screens); the id
-         * (texel * input rgb, texel alpha, blended) is reached by MK64 too and
-         * has always been drawn with the texel replacing the vertex colour. */
-        if (prg->shader_id == 0x01A00045) {
-            mode = GU_TFX_REPLACE;
-        }
+        /* (The sm64 PSP port forced GU_TFX_REPLACE for shader 0x01A00045 --
+         * texel * shade rgb, texel alpha -- for its transition screens.  MK64
+         * shades real geometry with it: Rainbow Road's star guardrail is that
+         * texture over yellow vertex colours and came out white, issue #10.) */
         sceGuTexFunc(mode, GU_TCC_RGBA);
         dbg_texfunc = mode;
         GULOG("  gu: texfunc %d\n", mode);
