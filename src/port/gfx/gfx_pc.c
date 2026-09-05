@@ -1912,9 +1912,22 @@ static inline void gfx_emit_vertex(const struct LoadedVertex *cv, uint32_t cc_id
 /* Emit a triangle, subdividing it while its texture coordinates span more
  * repeats than the GE interpolates precisely (MK64 tiles its ground and hill
  * planes hundreds of times across single polygons). */
+#ifndef GFX_MAX_UV_REPEATS
 #define GFX_MAX_UV_REPEATS 16.0f
+#endif
+/* How many times a triangle may be split in four while its texture coordinates
+ * span more than GFX_MAX_UV_REPEATS.  The real GE interpolates texture
+ * coordinates with limited precision: MK64's huge ground polygons (Moo Moo
+ * Farm's dirt track tiles its texture dozens of times across one triangle)
+ * come out striped, with seams along the polygon edges, on hardware -- while
+ * PPSSPP's float rasteriser hides it (issue #1).  Splitting keeps every
+ * emitted triangle's UV range small after the per-triangle repeat drop.
+ * 0 disables the subdivision (the old behaviour). */
+#ifndef GFX_UV_SUBDIV_DEPTH
+#define GFX_UV_SUBDIV_DEPTH 2
+#endif
 static void gfx_emit_triangle(const struct LoadedVertex *a, const struct LoadedVertex *b, const struct LoadedVertex *c, uint32_t cc_id, int lod, int depth) {
-    if (tri_state.use_texture && depth < 0) { // subdivision disabled: does not fix distant-texture aliasing (needs mipmaps)
+    if (tri_state.use_texture && depth < GFX_UV_SUBDIV_DEPTH) {
         float umin = a->u, umax = a->u, vmin = a->v, vmax = a->v;
         if (b->u < umin) umin = b->u; if (b->u > umax) umax = b->u;
         if (c->u < umin) umin = c->u; if (c->u > umax) umax = c->u;
