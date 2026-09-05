@@ -4,17 +4,21 @@
  *   analog stick     -> stick
  *   Cross            -> A (accelerate)
  *   Square           -> B (brake / reverse)
- *   Circle, L        -> Z (use item)
+ *   Circle, L        -> Z (use item); L is also the N64 L in the menus (OPTION)
  *   R                -> R (hop / drift)
  *   Triangle         -> C-up (look behind)
  *   D-pad            -> D-pad
  *   Start            -> Start
+ *   Select (tap)     -> C-right (cycle the HUD: map / positions / speedometer)
  *   Select (hold 3s) -> toggle the FPS counter (not passed to the game)
  */
 #include <ultra64.h>
 #include <pspctrl.h>
 #include <pspkernel.h>
+#include <defines.h> /* START_MENU_FROM_QUIT */
 #include "port.h"
+
+extern s32 gGamestate; /* main.h */
 
 #define STICK_DEADZONE 20
 
@@ -47,17 +51,23 @@ void controller_psp_read(OSContPad* pad) {
     u16 b = 0;
 
     sceCtrlPeekBufferPositive(&d, 1);
-    /* Hold SELECT for 3 seconds to toggle the FPS counter (off by default). */
+    /* SELECT: a tap is the N64 C-right (in a race it cycles the HUD: map /
+     * positions / speedometer -- issue #3); holding it for 3 seconds toggles
+     * the FPS counter (off by default).  The C-right press is delivered when
+     * the button is released, so a long hold does not also change the HUD. */
     {
         extern int gPortShowFps;
         static u32 selectSince; static int selectArmed = 1;
+        static int selectTapPending; /* release detected: send C-right for one read */
         u32 now = sceKernelGetSystemTimeLow();
         if (d.Buttons & PSP_CTRL_SELECT) {
             if (selectSince == 0) selectSince = now ? now : 1;
             else if (selectArmed && now - selectSince >= 3000000u) { gPortShowFps = !gPortShowFps; selectArmed = 0; }
         } else {
+            if (selectSince != 0 && selectArmed && now - selectSince < 500000u) selectTapPending = 1;
             selectSince = 0; selectArmed = 1;
         }
+        if (selectTapPending) { b |= R_CBUTTONS; selectTapPending = 0; }
     }
 
     if (d.Buttons & PSP_CTRL_CROSS) {
@@ -68,6 +78,12 @@ void controller_psp_read(OSContPad* pad) {
     }
     if (d.Buttons & (PSP_CTRL_CIRCLE | PSP_CTRL_LTRIGGER)) {
         b |= Z_TRIG;
+    }
+    /* In the menus the N64 L trigger opens OPTION (R opens DATA), so the PSP
+     * L trigger is also the N64 L there.  Not in a race: there L cycles the
+     * music volume, which would fire on every item use (issue #5). */
+    if ((d.Buttons & PSP_CTRL_LTRIGGER) && gGamestate == START_MENU_FROM_QUIT) {
+        b |= L_TRIG;
     }
     if (d.Buttons & PSP_CTRL_RTRIGGER) {
         b |= R_TRIG;
