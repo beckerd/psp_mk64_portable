@@ -191,6 +191,7 @@ static struct RDP {
         uint8_t tile_number;
         uint16_t width; // texels per row of the image (G_SETTIMG)
     } texture_to_load;
+    uint16_t tile_tmem[8]; // TMEM address (64-bit words) of every tile descriptor
     struct {
         const uint8_t *addr;
         uint32_t size_bytes;
@@ -200,6 +201,7 @@ static struct RDP {
         uint8_t fmt;
         uint8_t siz;
         uint8_t cms, cmt;
+        uint8_t tmem_slot; // which loaded_texture[] the render tile reads: its TMEM half (tmem / 256)
         uint16_t uls, ult, lrs, lrt; // U10.2
         uint32_t line_size_bytes;
     } texture_tile;
@@ -255,6 +257,7 @@ static struct {
     bool alpha_255;                        // copy mode: alpha forced to 255
     bool needs_lod;
     uint8_t mirror;                        // the bound texture was imported doubled (see gfx_mirror_flags)
+    bool use_fog;                          // cycle-1 blender is CLR_FOG * A_SHADE: lerp the colour to the fog colour
     struct RGBA const_color;
 } tri_state;
 
@@ -838,9 +841,15 @@ static inline bool gfx_is_static_memory(const void *p) {
     return (c >= _ftext && c < _fbss) || (c >= __assets_start && c < __assets_end);
 }
 
+/* The loaded_texture[] slot a texture unit reads: unit 0 is the render tile,
+ * which addresses either TMEM half; unit 1 keeps its own slot. */
+static inline int gfx_tex_slot(int tile) {
+    return tile == 0 ? rdp.texture_tile.tmem_slot : tile;
+}
+
 static uint32_t gfx_texture_content_hash(int tile, uint32_t fmt, uint32_t siz) {
-    const uint8_t *src = rdp.loaded_texture[tile].addr;
-    uint32_t stride = rdp.loaded_texture[tile].stride_bytes;
+    const uint8_t *src = rdp.loaded_texture[gfx_tex_slot(tile)].addr;
+    uint32_t stride = rdp.loaded_texture[gfx_tex_slot(tile)].stride_bytes;
     uint32_t h = 2166136261u;
     if (src == NULL) {
         return 0;
@@ -867,7 +876,7 @@ static uint32_t gfx_texture_content_hash(int tile, uint32_t fmt, uint32_t siz) {
         return 1;
     }
     if (stride == 0) {
-        uint32_t size = rdp.loaded_texture[tile].size_bytes;
+        uint32_t size = rdp.loaded_texture[gfx_tex_slot(tile)].size_bytes;
         h = hash_bytes(h, src, size > 4096 ? 4096 : size);
     } else {
         uint32_t width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
@@ -1106,8 +1115,8 @@ static void import_texture_any(int tile, uint8_t mirror) {
     uint8_t siz = rdp.texture_tile.siz;
     uint32_t width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
     uint32_t height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
-    const uint8_t* src = rdp.loaded_texture[tile].addr;
-    uint32_t stride = rdp.loaded_texture[tile].stride_bytes;
+    const uint8_t* src = rdp.loaded_texture[gfx_tex_slot(tile)].addr;
+    uint32_t stride = rdp.loaded_texture[gfx_tex_slot(tile)].stride_bytes;
     uint32_t x, y;
 
     if (width == 0 || height == 0) {
@@ -1226,7 +1235,7 @@ static void import_texture(int tile) {
         return;
     }
     uint8_t mirror = gfx_mirror_flags(width, height);
-    if (gfx_texture_cache_lookup(tile, &rendering_state.textures[tile], rdp.loaded_texture[tile].addr, fmt, siz, mirror)) {
+    if (gfx_texture_cache_lookup(tile, &rendering_state.textures[tile], rdp.loaded_texture[gfx_tex_slot(tile)].addr, fmt, siz, mirror)) {
         return;
     }
     import_texture_any(tile, mirror);
@@ -1419,6 +1428,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
         const Vtx_t *v = &vertices[i].v;
         const Vtx_tn *vn = &vertices[i].n;
         struct LoadedVertex *d = &rsp.loaded_vertices[dest_index];
+        int fog_alpha = -1; // >= 0: the RSP fog factor replaces the vertex alpha
 
         temp_vec[0] = v->ob[0];
         temp_vec[1] = v->ob[1];
@@ -1555,6 +1565,20 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
             d->_y = proj_vec[1];
             d->_z = proj_vec[2];
             d->_w = proj_vec[3]; // clip.w = signed near-plane distance
+            if (rsp.geometry_mode & G_FOG) {
+                // The RSP overwrites the shade alpha with the fog factor
+                // (fog_z = z/w * mul + offset, 0..255 = none..full fog); the
+                // fog render modes then blend toward the fog colour by it
+                // (see tri_state.use_fog in gfx_emit_vertex).
+                float w = proj_vec[3];
+                float winv = (w > -0.001f && w < 0.001f) ? 32767.0f : 1.0f / w;
+                float fog_z;
+                if (winv < 0.0f) winv = 32767.0f;
+                fog_z = proj_vec[2] * winv * rsp.fog_mul + rsp.fog_offset;
+                if (fog_z < 0.0f) fog_z = 0.0f;
+                if (fog_z > 255.0f) fog_z = 255.0f;
+                fog_alpha = (int) fog_z;
+            }
             {
                 float wz = (1.0f - GE_DEPTH_EPS) * proj_vec[3];
                 // Behind the eye, or nearer than the game's near plane (z_ndc < -1).
@@ -1637,7 +1661,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
         } else {
             d->color.a = v->cn[3];
         }*/
-        d->color.a = v->cn[3];
+        d->color.a = fog_alpha >= 0 ? (uint8_t) fog_alpha : v->cn[3];
     }
 #ifdef PORT_PROFILE_DL
     gfx_prof_vtx += port_time_us() - _pv0;
@@ -1746,7 +1770,14 @@ static void gfx_tri_rebuild_state(struct LoadedVertex *v1) {
         rdp.viewport_or_scissor_changed = false;
     }
     uint32_t cc_id = rdp.combine_mode;
-    bool use_alpha = (rdp.other_mode_l & (G_BL_A_MEM << 18)) == 0;
+    // Whether the framebuffer blend uses the pixel alpha: the last blender
+    // cycle's "b" mux is 1-A (G_BL_1MA).  In 2-cycle mode that is cycle 2
+    // (bits 16-17); the 1-cycle test below is sm64-port's.  MK64's fogged
+    // render modes (FOG_SHADE_A + an opaque cycle 2) blended with the fog
+    // amount as opacity before -- Moo Moo Farm's terrain let the ground
+    // gradient show through as green patches (issue #1).
+    bool two_cycle = (rdp.other_mode_h & (3U << G_MDSFT_CYCLETYPE)) == G_CYC_2CYCLE;
+    bool use_alpha = two_cycle ? ((rdp.other_mode_l >> 16) & 3) == G_BL_1MA : (rdp.other_mode_l & (G_BL_A_MEM << 18)) == 0;
     bool use_fog = (rdp.other_mode_l >> 30) == G_BL_CLR_FOG;
     bool texture_edge = (rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA;
     bool use_noise = (rdp.other_mode_l & G_AC_DITHER) == G_AC_DITHER;
@@ -1817,6 +1848,7 @@ static void gfx_tri_rebuild_state(struct LoadedVertex *v1) {
 #endif
     tri_state.cc_id = cc_id;
     tri_state.comb = comb;
+    tri_state.use_fog = use_fog;
     tri_state.use_texture = used_textures[0] || used_textures[1];
     if (tri_state.use_texture) {
         float tex_width = (float) ((rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4);
@@ -1904,6 +1936,17 @@ static inline void gfx_emit_vertex(const struct LoadedVertex *cv, uint32_t cc_id
         default:
             gfx_eval_vertex_color(cc_id, &cv->color, lod, &out->color);
             break;
+    }
+    if (tri_state.use_fog) {
+        // Blender cycle 1 of the fog render modes: colour = lerp(colour, fog
+        // colour, shade alpha) -- the RSP fog factor with G_FOG on, otherwise
+        // the model's vertex alpha (Moo Moo Farm darkens its dirt that way).
+        // Folded into the vertex colour before the texture multiply: exact
+        // for dark fog colours, slightly darker than the N64 for bright ones.
+        int a = cv->color.a, ia = 255 - a;
+        out->color.r = (uint8_t) ((out->color.r * ia + rdp.fog_color.r * a) / 255);
+        out->color.g = (uint8_t) ((out->color.g * ia + rdp.fog_color.g * a) / 255);
+        out->color.b = (uint8_t) ((out->color.b * ia + rdp.fog_color.b * a) / 255);
     }
     buf_num_vert++;
     buf_vbo_len += sizeof(psp_fast_t);
@@ -2404,7 +2447,14 @@ static void gfx_sp_tri1_2d(uint8_t vtx1_idx, uint8_t vtx2_idx, UNUSED uint8_t vt
     
     uint32_t cc_id = rdp.combine_mode;
     
-    bool use_alpha = (rdp.other_mode_l & (G_BL_A_MEM << 18)) == 0;
+    // Whether the framebuffer blend uses the pixel alpha: the last blender
+    // cycle's "b" mux is 1-A (G_BL_1MA).  In 2-cycle mode that is cycle 2
+    // (bits 16-17); the 1-cycle test below is sm64-port's.  MK64's fogged
+    // render modes (FOG_SHADE_A + an opaque cycle 2) blended with the fog
+    // amount as opacity before -- Moo Moo Farm's terrain let the ground
+    // gradient show through as green patches (issue #1).
+    bool two_cycle = (rdp.other_mode_h & (3U << G_MDSFT_CYCLETYPE)) == G_CYC_2CYCLE;
+    bool use_alpha = two_cycle ? ((rdp.other_mode_l >> 16) & 3) == G_BL_1MA : (rdp.other_mode_l & (G_BL_A_MEM << 18)) == 0;
     bool use_fog = (rdp.other_mode_l >> 30) == G_BL_CLR_FOG;
     bool texture_edge = (rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA;
     bool use_noise = (rdp.other_mode_l & G_AC_DITHER) == G_AC_DITHER;
@@ -2665,11 +2715,25 @@ static void gfx_dp_set_tile(uint8_t fmt, uint32_t siz, uint32_t line, uint32_t t
         rdp.texture_tile.siz = siz;
         rdp.texture_tile.cms = cms;
         rdp.texture_tile.cmt = cmt;
+        // MK64's packed course display lists keep two textures in TMEM (one
+        // per half) and point the render tile at either: tile config G is a
+        // 32x32 tile at tmem 256.  Draw from the block loaded into that half,
+        // not always from the first (Moo Moo Farm's dirt road showed the grass
+        // texture on those polygons, issue #1).
+        rdp.texture_tile.tmem_slot = (tmem / 256) & 1;
         rdp.texture_tile.line_size_bytes = line * 8;
         rdp.textures_changed[0] = true;
         rdp.textures_changed[1] = true;
     }
     
+    // Every tile descriptor remembers its TMEM half.  MK64's packed course
+    // display lists load through tile 6 as well as tile 7 (plain dirt through
+    // tile 7 into TMEM 0, the dirt-with-patches variant through tile 6 into
+    // TMEM 256, then the render tile picks either half); recording the half
+    // only for G_TX_LOADTILE sent the tile-6 load into slot 0 over the other
+    // texture and left slot 1 stale -- Moo Moo Farm's road showed the grass
+    // texture in patches (issue #1).
+    rdp.tile_tmem[tile & 7] = (uint16_t) tmem;
     if (tile == G_TX_LOADTILE) {
         rdp.texture_to_load.tile_number = tmem / 256;
     }
@@ -2703,10 +2767,9 @@ static void gfx_dp_load_block(uint8_t tile, UNUSED uint32_t uls, UNUSED uint32_t
     tri_state.valid = false;
     _UNUSED(dxt);
 
-    if (tile == 1) return;
-    SUPPORT_CHECK(tile == G_TX_LOADTILE);
     SUPPORT_CHECK(uls == 0);
     SUPPORT_CHECK(ult == 0);
+    rdp.texture_to_load.tile_number = (rdp.tile_tmem[tile & 7] / 256) & 1; // the TMEM half this tile loads into
     
     // The lrs field rather seems to be number of pixels to load
     uint32_t word_size_shift;
@@ -2735,8 +2798,7 @@ static void gfx_dp_load_block(uint8_t tile, UNUSED uint32_t uls, UNUSED uint32_t
 
 static void gfx_dp_load_tile(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t lrs, uint32_t lrt) {
     tri_state.valid = false;
-    if (tile == 1) return;
-    SUPPORT_CHECK(tile == G_TX_LOADTILE);
+    rdp.texture_to_load.tile_number = (rdp.tile_tmem[tile & 7] / 256) & 1; // the TMEM half this tile loads into
     {
         static int n;
         if (gfx_debug_frame) port_log("  loadtile uls %u ult %u lrs %u lrt %u (u10.2) imgw %u\n", (unsigned) uls, (unsigned) ult, (unsigned) lrs, (unsigned) lrt, rdp.texture_to_load.width);

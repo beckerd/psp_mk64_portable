@@ -395,7 +395,17 @@ static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
         if (prg->shader_id == 0x01A00045) {
             mode = GU_TFX_REPLACE;
         }
-        sceGuTexFunc(mode, GU_TCC_RGBA);
+        /* The texel alpha only takes part when the alpha combiner reads it;
+         * otherwise the vertex alpha (the fog opacity on fogged geometry) is
+         * the whole alpha, and an IA texture's alpha must not mottle it. */
+        {
+            int alpha_uses_texel = 0, j;
+            for (j = 0; j < 4; j++) {
+                uint8_t c = prg->cc.c[1][j];
+                if (c == SHADER_TEXEL0 || c == SHADER_TEXEL0A || c == SHADER_TEXEL1) alpha_uses_texel = 1;
+            }
+            sceGuTexFunc(mode, alpha_uses_texel ? GU_TCC_RGBA : GU_TCC_RGB);
+        }
         GULOG("  gu: texfunc %d\n", mode);
     }
 }
