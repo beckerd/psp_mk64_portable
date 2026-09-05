@@ -43,10 +43,10 @@ static const ScriptStep sSteps[] = {
     { 1566, 1640, 0, 0, 0 }, // ...and release everything: a new A press would pick "CONTINUE GAME"
     TAP(240, START_BUTTON),  // title screen -> main menu
     // Main menu: 1P -> Mario GP -> 50cc -> OK (defaults; each A advances)
-    TAP(360, A_BUTTON),
-    TAP(420, A_BUTTON),
-    TAP(480, A_BUTTON),
-    TAP(540, A_BUTTON),
+    TAP(400, A_BUTTON),  // leaves the title; the game select appears ~12 frames later
+    TAP(470, A_BUTTON),  // (shot450 shows its top level with the L OPTION / R DATA buttons)
+    TAP(520, A_BUTTON),
+    TAP(580, A_BUTTON),
     // Character select: pick, then OK
     TAP(660, A_BUTTON),
     TAP(720, A_BUTTON),
@@ -132,7 +132,8 @@ void port_input_script(OSContPad* pad) {
         sLastState = gGamestate;
         sLastMenu = gMenuSelection;
     }
-    if (((sFrame % SHOT_EVERY) == 0 && sFrame >= 240) || (sFrame >= 1380 && sFrame <= 1700 && (sFrame % 30) == 0)) {
+    if (((sFrame % SHOT_EVERY) == 0 && sFrame >= 240) || sFrame == 450 /* top-level game select: OPTION/DATA */ ||
+        (sFrame >= 1380 && sFrame <= 1700 && (sFrame % 30) == 0)) {
         port_screenshot((int) sFrame);
         if (gGamestate == RACING && gPlayerOne != NULL) {
             PORT_LOG("script f%u: p1 pos %.1f %.1f %.1f speed %.2f lap %d\n", sFrame, gPlayerOne->pos[0],
