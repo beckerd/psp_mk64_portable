@@ -39,6 +39,8 @@ typedef struct {
 #define TAP(f, b) { (f), (f) + 5, (b), 0, 0 }
 
 static const ScriptStep sSteps[] = {
+    TAP(1560, START_BUTTON), // pause mid-race (first so it wins over the held-A steps); shot1590/1620 show the pause screen
+    { 1566, 1640, 0, 0, 0 }, // ...and release everything: a new A press would pick "CONTINUE GAME"
     TAP(240, START_BUTTON),  // title screen -> main menu
     // Main menu: 1P -> Mario GP -> 50cc -> OK (defaults; each A advances)
     TAP(360, A_BUTTON),
@@ -149,6 +151,13 @@ void port_input_script(OSContPad* pad) {
         FILE* fp = fopen(port_save_path("menubuf.bin"), "wb");
         if (fp) { fwrite(gMenuTextureBuffer, 1, 320 * 240 * 2, fp); fclose(fp); }
         PORT_LOG("script: menu buffer dumped from %p\n", gMenuTextureBuffer);
+    }
+    if (sFrame == 481) {
+        // One fully traced frame of the game-select screen (issue #5: the
+        // GAME SELECT banner and the OPTION/DATA buttons do not draw).
+        extern int gfx_debug_frame, gfx_trace_frames;
+        gfx_debug_frame = 1;
+        gfx_trace_frames = 1;
     }
     if (sFrame == SCRIPT_END) {
         PORT_LOG("script done\n");
