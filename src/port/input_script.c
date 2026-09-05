@@ -39,8 +39,10 @@ typedef struct {
 #define TAP(f, b) { (f), (f) + 5, (b), 0, 0 }
 
 static const ScriptStep sSteps[] = {
+#ifndef PORT_STRAIGHT_RACE
     TAP(1560, START_BUTTON), // pause mid-race (first so it wins over the held-A steps); shot1590/1620 show the pause screen
     { 1566, 1640, 0, 0, 0 }, // ...and release everything: a new A press would pick "CONTINUE GAME"
+#endif
     TAP(240, START_BUTTON),  // title screen -> main menu
     // Main menu: 1P -> Mario GP -> 50cc -> OK (defaults; each A advances)
     TAP(400, A_BUTTON),  // leaves the title; the game select appears ~12 frames later
@@ -59,6 +61,12 @@ static const ScriptStep sSteps[] = {
     // Menus only: the pad is handed over as the race starts (see SCRIPT_END).
 };
 #define SCRIPT_END 1060
+#elif defined(PORT_STRAIGHT_RACE)
+    // Issue #10: drive straight ahead from the start (the Rainbow Road kart
+    // shadow turns into a solid black box after ~5 s of driving).
+    { 1100, 3200, A_BUTTON, 0, 0 },
+};
+#define SCRIPT_END 3300
 #else
     // Race: hold A and keep a gentle right-hand line (Luigi Raceway runs
     // clockwise), with one hop/drift to exercise R.
@@ -136,7 +144,11 @@ void port_input_script(OSContPad* pad) {
         sLastMenu = gMenuSelection;
     }
     if (((sFrame % SHOT_EVERY) == 0 && sFrame >= 240) || sFrame == 450 /* top-level game select: OPTION/DATA */ || sFrame == 1442 /* the frame traced at 1441 */ || sFrame == 1352 ||
-        (sFrame >= 1380 && sFrame <= 1700 && (sFrame % 30) == 0)) {
+        (sFrame >= 1380 && sFrame <= 1700 && (sFrame % 30) == 0)
+#ifdef PORT_STRAIGHT_RACE
+        || (sFrame >= 1290 && sFrame <= 1760 && (sFrame % 15) == 0) || sFrame == 1331 || sFrame == 1601
+#endif
+        ) {
         port_screenshot((int) sFrame);
         if (gGamestate == RACING && gPlayerOne != NULL) {
             PORT_LOG("script f%u: p1 pos %.1f %.1f %.1f speed %.2f lap %d\n", sFrame, gPlayerOne->pos[0],
@@ -172,6 +184,15 @@ void port_input_script(OSContPad* pad) {
             if (fp) { if (d) fwrite(d, 1, 8192, fp); fclose(fp); }
         }
     }
+#ifdef PORT_STRAIGHT_RACE
+    if ((sFrame == 1330 || sFrame == 1600) && gPortForceCourse >= 0) {
+        // Two traced race frames: early (shadow expected fine) and late (the box).
+        extern int gfx_debug_frame, gfx_trace_frames, gfx_colorflush;
+        gfx_debug_frame = 1;
+        gfx_trace_frames = 1;
+        gfx_colorflush = (sFrame == 1600); /* shot1601 shows every batch in its own colour */
+    }
+#endif
     if (sFrame == 1441 && gPortForceCourse >= 0) {
         // One traced race frame on the forced course (issue #1: Moo Moo Farm road patches).
         extern int gfx_debug_frame, gfx_trace_frames;

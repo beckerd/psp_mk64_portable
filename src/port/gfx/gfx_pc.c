@@ -35,6 +35,7 @@
 extern int gfx_trace_frames;
 extern int gfx_debug_frame;
 extern int gfx_dump_textures;
+int gfx_colorflush; /* debug frame: paint every GE batch in a unique flat colour (PORT_GFX_DEBUG) */
 extern uint32_t port_time_us(void);
 extern void port_profile_add(int slot, uint32_t us);
 uint32_t gfx_prof_cmds, gfx_prof_tris;
@@ -635,8 +636,8 @@ static void gfx_flush(void) {
         }
 #endif
 
-#ifdef PORT_EXP_COLORFLUSH
-        if (gfx_debug_frame) {
+#ifdef PORT_GFX_DEBUG
+        if (gfx_debug_frame && gfx_colorflush) {
             // Paint this batch in a unique flat colour so a screenshot identifies it.
             uint32_t idx = gfx_flush_index;
             struct RGBA col = { (uint8_t) (32 + (idx * 37) % 224), (uint8_t) (32 + (idx * 91) % 224), (uint8_t) (32 + (idx * 53) % 224), 255 };
@@ -655,8 +656,8 @@ static void gfx_flush(void) {
 #else
         gfx_rapi->draw_triangles((float *)buf_vbo, buf_vbo_len, buf_vbo_num_tris);
 #endif
-#ifdef PORT_EXP_COLORFLUSH
-        if (gfx_debug_frame) {
+#ifdef PORT_GFX_DEBUG
+        if (gfx_debug_frame && gfx_colorflush) {
             sceGuEnable(GU_TEXTURE_2D);
             rendering_state.shader_program = NULL; // force state re-apply
             tri_state.valid = false;
