@@ -18,6 +18,7 @@
 #include "math_util.h"
 #include "main.h"
 #include "menus.h"
+#include "port/port.h"
 
 Vp D_802B8880[] = {
     { { { 640, 480, 511, 0 }, { 640, 480, 511, 0 } } },
@@ -1447,6 +1448,13 @@ void func_802A74BC(void) {
 }
 
 void copy_framebuffer(s32 arg0, s32 arg1, s32 width, s32 height, u16* source, u16* target) {
+#ifndef TARGET_N64
+    /* The port renders straight into VRAM and keeps no CPU-side framebuffer
+     * (buffers.h shrinks the N64 ones to a few texels), so the GE backend
+     * captures the patch from its own frame instead.  Issue #11. */
+    (void) source;
+    port_fb_copy_request(arg0, arg1, width, height, target);
+#else
     s32 var_v1;
     s32 var_a1;
     s32 targetIndex;
@@ -1459,6 +1467,7 @@ void copy_framebuffer(s32 arg0, s32 arg1, s32 width, s32 height, u16* source, u1
             target[targetIndex] = source[sourceIndex];
         }
     }
+#endif
 }
 
 void func_802A7728(void) {

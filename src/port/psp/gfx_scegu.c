@@ -779,6 +779,150 @@ void gfx_scegu_draw_triangles_2d(float buf_vbo[], UNUSED size_t buf_vbo_len, UNU
     sceGuDrawArray(GU_SPRITES, GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, quad_buf);
 }
 
+/*============================================================================*/
+/* Stadium TV screens: capture a patch of the finished frame into N64 tiles   */
+/*============================================================================*/
+
+/* The game (copy_framebuffer in skybox_and_splitscreen.c) asks for up to six
+ * 64x32 RGBA16 tiles per frame, each a patch of the previous frame in N64
+ * 320x240 coordinates.  Requests are collected while the game builds its
+ * display list; once the frame has been rendered (gfx_scegu_end_frame, after
+ * the sync) the GE scales every requested patch of the frame into a small
+ * 5551 render target, sceGuCopyImage brings it back to RAM (PPSSPP reads a
+ * framebuffer back only through a block transfer), and the CPU rewrites it as
+ * big-endian N64 RGBA16 in the tile the interpreter will import next frame.
+ * Issue #11. */
+#define CAP_MAX      8
+#define CAP_SLOT_W   64
+#define CAP_SLOT_H   32
+#define CAP_W        (CAP_SLOT_W * 2)               /* 2 x 4 slots */
+#define CAP_H        (CAP_SLOT_H * (CAP_MAX / 2))
+typedef struct { int x, y, w, h; uint16_t *target; } CaptureReq;
+static CaptureReq cap_req[CAP_MAX];
+static int cap_count;
+static void *cap_vram;                                /* offset in VRAM (getStaticVramBuffer style) */
+static void *cur_draw_fb;                             /* draw buffer being rendered this frame (same style) */
+static uint16_t cap_ram[CAP_W * CAP_H] __attribute__((aligned(64)));
+extern void gfx_overlay_state_dirty(void);
+
+void port_fb_copy_request(int x, int y, int w, int h, uint16_t *target) {
+    int i;
+    if (cap_vram == NULL || target == NULL || (uintptr_t) target < 0x08800000u || w <= 0 || h <= 0) {
+        return;
+    }
+    if (w > CAP_SLOT_W) w = CAP_SLOT_W;
+    if (h > CAP_SLOT_H) h = CAP_SLOT_H;
+    for (i = 0; i < cap_count; i++) {
+        if (cap_req[i].target == target) break; // same tile asked twice: keep the latest
+    }
+    if (i == cap_count) {
+        if (cap_count == CAP_MAX) return;
+        cap_count++;
+    }
+    cap_req[i].x = x; cap_req[i].y = y; cap_req[i].w = w; cap_req[i].h = h; cap_req[i].target = target;
+}
+
+/* N64 320x240 frame coordinates -> PSP frame pixels.  The 3D view keeps the
+ * N64's vertical field of view (skybox_and_splitscreen.c), so the N64 picture
+ * is the centred 4:3 part of the 480x272 frame, scaled by 272/240. */
+static inline float cap_map_x(int x) {
+#ifdef PORT_NO_WIDE_FOV
+    return x * (SCR_WIDTH / 320.0f);
+#else
+    return (SCR_WIDTH - 320.0f * SCR_HEIGHT / 240.0f) * 0.5f + x * (SCR_HEIGHT / 240.0f);
+#endif
+}
+static inline float cap_map_y(int y) {
+    return y * (SCR_HEIGHT / 240.0f);
+}
+
+static void gfx_scegu_capture_screens(void) {
+    const unsigned char *edram = (const unsigned char *) sceGeEdramGetAddr();
+    const void *frame_abs = edram + ((uintptr_t) cur_draw_fb & 0x00FFFFFFu);
+    void *cap_abs = (void *) (edram + ((uintptr_t) cap_vram & 0x00FFFFFFu));
+    const volatile uint16_t *src = (const volatile uint16_t *) ((uintptr_t) cap_ram | 0x40000000u); // uncached: the GE wrote it
+    int i, x, y;
+
+    if (cap_count == 0) {
+        return;
+    }
+    sceGuStart(GU_DIRECT, list);
+    sceGuDrawBufferList(GU_PSM_5551, cap_vram, CAP_W);
+    sceGuOffset(2048 - (CAP_W / 2), 2048 - (CAP_H / 2));
+    sceGuViewport(2048, 2048, CAP_W, CAP_H);
+    sceGuScissor(0, 0, CAP_W, CAP_H);
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDepthMask(GU_TRUE);
+    sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuEnable(GU_TEXTURE_2D);
+    sceGuTexMode(GU_PSM_5650, 0, 0, 0);
+    sceGuTexImage(0, 512, 512, BUF_WIDTH, frame_abs);
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
+    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuTexWrap(GU_CLAMP, GU_CLAMP);
+    sceGuTexFlush();
+    for (i = 0; i < cap_count; i++) {
+        const CaptureReq *r = &cap_req[i];
+        VertexColor *v = (VertexColor *) sceGuGetMemory(sizeof(VertexColor) * 2);
+        int sx = (i & 1) * CAP_SLOT_W, sy = (i >> 1) * CAP_SLOT_H;
+        v[0].a = (unsigned short) (cap_map_x(r->x) + 0.5f);
+        v[0].b = (unsigned short) (cap_map_y(r->y) + 0.5f);
+        v[0].color = 0xFFFFFFFF;
+        v[0].x = (unsigned short) sx; v[0].y = (unsigned short) sy; v[0].z = 0;
+        v[1].a = (unsigned short) (cap_map_x(r->x + r->w) + 0.5f);
+        v[1].b = (unsigned short) (cap_map_y(r->y + r->h) + 0.5f);
+        v[1].color = 0xFFFFFFFF;
+        v[1].x = (unsigned short) (sx + r->w); v[1].y = (unsigned short) (sy + r->h); v[1].z = 0;
+        sceGuDrawArray(GU_SPRITES, GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, v);
+        GULOG("  capture %d: n64 (%d,%d) %dx%d -> psp (%u,%u)-(%u,%u) tile %p\n", i, r->x, r->y, r->w, r->h, v[0].a, v[0].b, v[1].a, v[1].b, r->target);
+    }
+    sceGuCopyImage(GU_PSM_5551, 0, 0, CAP_W, CAP_H, CAP_W, cap_abs, 0, 0, CAP_W, cap_ram);
+    sceGuTexSync();
+    // Back to the frame.  gfx_overlay_state_dirty() (below) makes the
+    // interpreter re-send its state, but it only re-sends what DIFFERS from
+    // the state it declares (blend on, depth test off, depth writes off, no
+    // decal), so the GE must be left in exactly that state -- through the
+    // backend's own setters so their caches agree.  Leaving blend disabled
+    // here drew the Luigi Raceway clouds on black boxes (issue #11 follow-up).
+    sceGuDrawBufferList(GU_PSM_5650, cur_draw_fb, BUF_WIDTH);
+    sceGuOffset(2048 - (SCR_WIDTH / 2), 2048 - (SCR_HEIGHT / 2));
+    sceGuViewport(2048 - (SCR_WIDTH / 2), 2048 - (SCR_HEIGHT / 2), SCR_WIDTH, SCR_HEIGHT);
+    sceGuScissor(0, 0, SCR_WIDTH, SCR_HEIGHT);
+    gfx_scegu_set_use_alpha(true);
+    gfx_scegu_set_depth_test(false);
+    gfx_scegu_set_depth_mask(false);
+    gfx_scegu_set_zmode_decal(false);
+    sceGuFinish();
+    sceGuSync(0, 0);
+
+    for (i = 0; i < cap_count; i++) {
+        const CaptureReq *r = &cap_req[i];
+        int sx = (i & 1) * CAP_SLOT_W, sy = (i >> 1) * CAP_SLOT_H;
+        uint16_t *dst = r->target;
+        uint32_t sum = 0;
+        static int logged;
+        for (y = 0; y < r->h; y++) {
+            const volatile uint16_t *row = src + (sy + y) * CAP_W + sx;
+            for (x = 0; x < r->w; x++) {
+                uint16_t p = row[x]; // PSP 5551: a b g r (low bits = red)
+                uint16_t n64 = (uint16_t) (((p & 0x1F) << 11) | (((p >> 5) & 0x1F) << 6) | (((p >> 10) & 0x1F) << 1) | 1);
+                sum += n64;
+                *dst++ = (uint16_t) ((n64 << 8) | (n64 >> 8)); // big-endian texel, read back with be16()
+            }
+        }
+        if (logged < 12) { // the first tiles, once: proves the readback is live on the device
+            logged++;
+            port_log("gfx: screen tile %p <- frame (%d,%d) %dx%d, texel sum %08X\n", r->target, r->x, r->y, r->w, r->h, (unsigned) sum);
+        }
+    }
+    cap_count = 0;
+    psp_tex_bound = (unsigned int) -1; // the GE has our frame bound, not a texman texture
+    gfx_overlay_state_dirty();
+}
+
 static void gfx_scegu_init(void) {
     sceGuInit();
 
@@ -787,6 +931,7 @@ static void gfx_scegu_init(void) {
     void *zbp = getStaticVramBuffer(BUF_WIDTH, SCR_HEIGHT, GU_PSM_4444);
     gu_zbp = zbp;
 
+    cur_draw_fb = fbp0;
     sceGuStart(GU_DIRECT, list);
     sceGuDrawBuffer(GU_PSM_5650, fbp0, BUF_WIDTH);
     sceGuDispBuffer(SCR_WIDTH, SCR_HEIGHT, fbp1, BUF_WIDTH);
@@ -817,6 +962,7 @@ static void gfx_scegu_init(void) {
     sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
 
+    cap_vram = getStaticVramBuffer(CAP_W, CAP_H, GU_PSM_5551); // stadium screen capture target (issue #11)
     void *texman_buffer = getStaticVramBufferBytes(TEXMAN_BUFFER_SIZE);
     void *texman_aligned = (void *) ((((unsigned int) texman_buffer + TEX_ALIGNMENT - 1) / TEX_ALIGNMENT) * TEX_ALIGNMENT);
     texman_reset(texman_aligned, TEXMAN_BUFFER_SIZE);
@@ -887,6 +1033,7 @@ static void gfx_scegu_end_frame(void) {
         port_log("gfx: display list %u bytes (max %u of %u)\n", used, max_used, (unsigned) GU_LIST_BYTES);
     }
     sceGuSync(0, 0);
+    gfx_scegu_capture_screens(); // stadium TV tiles from the finished frame (before the vblank wait absorbs it)
     // MK64 runs one game frame per two VI retraces: lock to 30 fps by waiting
     // for the second vblank since the last swap (no wait if we are already late).
     {
@@ -897,7 +1044,7 @@ static void gfx_scegu_end_frame(void) {
         }
         last_vcount = (int) sceDisplayGetVcount();
     }
-    sceGuSwapBuffers();
+    cur_draw_fb = sceGuSwapBuffers(); // the buffer the next frame renders into
 }
 
 static void gfx_scegu_finish_render(void) {

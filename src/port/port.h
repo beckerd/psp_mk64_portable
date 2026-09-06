@@ -77,6 +77,14 @@ void port_debug_frame_end(u32 frame);
 void port_log(const char* fmt, ...);
 #define PORT_LOG(...) port_log(__VA_ARGS__)
 
+/* Stadium TV screens (Luigi Raceway, Wario Stadium, the award ceremony): the
+ * game copies a patch of the previous frame's framebuffer into RGBA16 course
+ * textures.  The port has no CPU-readable framebuffer, so copy_framebuffer()
+ * files a request instead and the GE backend fills the tile from its own frame
+ * at the end of the frame.  x/y/w/h are in the N64's 320x240 frame; `target`
+ * is the tile in the course texture segment, written in N64 texel order. */
+void port_fb_copy_request(s32 x, s32 y, s32 w, s32 h, u16* target);
+
 /* Frame hooks implemented by the platform backend. */
 void port_gfx_run(Gfx* dl);        // execute a display list (F3DEX -> sceGu)
 void port_gfx_start_frame(void);
