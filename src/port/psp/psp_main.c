@@ -27,7 +27,11 @@
 
 PSP_MODULE_INFO("MK64", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
-PSP_HEAP_SIZE_KB(-1024);
+/* The port mallocs almost nothing (file buffers, a few KB): a fixed C heap
+ * leaves the rest of user RAM with the kernel, where thread stacks and system
+ * dialogs draw from.  A negative value here handed everything but 1 MB to the
+ * C heap and made every static saving invisible. */
+PSP_HEAP_SIZE_KB(512);
 
 extern struct GfxWindowManagerAPI gfx_psp;
 extern void port_audio_out_init(void);
