@@ -848,6 +848,33 @@ static inline int gfx_tex_slot(int tile) {
     return tile == 0 ? rdp.texture_tile.tmem_slot : tile;
 }
 
+/* Render-tile texture size in texels.  MK64 scrolls textures (Royal Raceway
+ * dash pads, DK Jungle river, Koopa Beach waterfall, Banshee Boardwalk) by
+ * rewriting only the tile's upper-left corner every frame
+ * (find_and_set_tile_size) and leaving lrs/lrt at the full extent; no display
+ * list in the game sets a non-zero corner otherwise.  So the corner is purely
+ * a UV offset (applied in gfx_sp_tri_update_state) and the texture size is the
+ * extent from the origin.  Sizing from lrs-uls / lrt-ult shrank the texture as
+ * it scrolled and went negative once the corner passed the extent, which
+ * rejected the import and left the previously bound texture on the pad
+ * (issue #8: flashing red and black, stretched). */
+static inline void gfx_tile_size(int tile, uint32_t *width, uint32_t *height) {
+    if (rdp.loaded_texture[gfx_tex_slot(tile)].stride_bytes != 0) {
+        // LoadTile: TMEM holds exactly the sub-rectangle (uls,ult)-(lrs,lrt) of
+        // a larger image (menu atlases, menu_items.c) and the corner is that
+        // sub-rectangle's origin: size it corner to corner.
+        int w = ((int) rdp.texture_tile.lrs - (int) rdp.texture_tile.uls + 4) / 4;
+        int h = ((int) rdp.texture_tile.lrt - (int) rdp.texture_tile.ult + 4) / 4;
+        *width = (uint32_t) (w < 1 ? 1 : w);
+        *height = (uint32_t) (h < 1 ? 1 : h);
+    } else {
+        // LoadBlock: the whole texture is loaded; a corner is only ever a
+        // scroll offset (see above), the size is the extent from the origin.
+        *width = (rdp.texture_tile.lrs + 4u) / 4u;
+        *height = (rdp.texture_tile.lrt + 4u) / 4u;
+    }
+}
+
 static uint32_t gfx_texture_content_hash(int tile, uint32_t fmt, uint32_t siz) {
     const uint8_t *src = rdp.loaded_texture[gfx_tex_slot(tile)].addr;
     uint32_t stride = rdp.loaded_texture[gfx_tex_slot(tile)].stride_bytes;
@@ -880,8 +907,8 @@ static uint32_t gfx_texture_content_hash(int tile, uint32_t fmt, uint32_t siz) {
         uint32_t size = rdp.loaded_texture[gfx_tex_slot(tile)].size_bytes;
         h = hash_bytes(h, src, size > 4096 ? 4096 : size);
     } else {
-        uint32_t width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
-        uint32_t height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
+        uint32_t width, height;
+        gfx_tile_size(tile, &width, &height);
         uint32_t row_bytes = tex_bytes_per_row(width, siz);
         uint32_t y;
         if (width * height > 8192) {
@@ -921,9 +948,9 @@ static uint8_t gfx_mirror_flags(uint32_t width, uint32_t height) {
     return m;
 }
 
-static uint32_t gfx_texture_upload_bytes(uint32_t fmt, uint32_t siz, uint8_t mirror) {
-    uint32_t width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
-    uint32_t height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
+static uint32_t gfx_texture_upload_bytes(int tile, uint32_t fmt, uint32_t siz, uint8_t mirror) {
+    uint32_t width, height;
+    gfx_tile_size(tile, &width, &height);
     uint32_t bpp = ((fmt == G_IM_FMT_RGBA && siz == G_IM_SIZ_16b) || fmt == G_IM_FMT_CI) ? 2 : 4;
     uint32_t pw = 1, ph = 1;
     if (width * height > GFX_MAX_IMPORT_TEXELS) height = GFX_MAX_IMPORT_TEXELS / (width ? width : 1);
@@ -937,7 +964,7 @@ static uint32_t gfx_texture_upload_bytes(uint32_t fmt, uint32_t siz, uint8_t mir
 static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, const uint8_t *orig_addr, uint32_t fmt, uint32_t siz, uint8_t mirror) {
     size_t hash = (uintptr_t)orig_addr;
     uint32_t content_hash = gfx_texture_content_hash(tile, fmt, siz);
-    uint32_t upload_bytes = gfx_texture_upload_bytes(fmt, siz, mirror);
+    uint32_t upload_bytes = gfx_texture_upload_bytes(tile, fmt, siz, mirror);
     struct TextureHashmapNode *stale = NULL;
     hash = (hash >> 5) & 0x3ff;
     struct TextureHashmapNode **node = &gfx_texture_cache.hashmap[hash];
@@ -1114,8 +1141,8 @@ static void import_texture_any(int tile, uint8_t mirror) {
     uint16_t* out16 = (uint16_t*) out32;
     uint8_t fmt = rdp.texture_tile.fmt;
     uint8_t siz = rdp.texture_tile.siz;
-    uint32_t width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
-    uint32_t height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
+    uint32_t width, height;
+    gfx_tile_size(tile, &width, &height);
     const uint8_t* src = rdp.loaded_texture[gfx_tex_slot(tile)].addr;
     uint32_t stride = rdp.loaded_texture[gfx_tex_slot(tile)].stride_bytes;
     uint32_t x, y;
@@ -1230,8 +1257,8 @@ static void import_texture(int tile) {
     // GE binding but no valid upload, and the sceGu texture setup then feeds the
     // hardware GE bogus params (log2(0)) -> device-only fault (the emulator's
     // software GE tolerates it).  Leave the previously-bound texture instead.
-    uint32_t width  = (uint32_t) (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
-    uint32_t height = (uint32_t) (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
+    uint32_t width, height;
+    gfx_tile_size(tile, &width, &height);
     if (width == 0 || height == 0 || width > 1024 || height > 1024) {
         return;
     }
@@ -1852,8 +1879,11 @@ static void gfx_tri_rebuild_state(struct LoadedVertex *v1) {
     tri_state.use_fog = use_fog;
     tri_state.use_texture = used_textures[0] || used_textures[1];
     if (tri_state.use_texture) {
-        float tex_width = (float) ((rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4);
-        float tex_height = (float) ((rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4);
+        uint32_t tw, th;
+        float tex_width, tex_height;
+        gfx_tile_size(0, &tw, &th);
+        tex_width = (float) tw;
+        tex_height = (float) th;
         // A degenerate render-tile size (e.g. lrt < ult -> height 0 on a DK
         // Jungle terrain texture) would make 1/tex_height = Inf/NaN, which flows
         // into every vertex UV and faults the hardware GE (the host FPU/GE just
