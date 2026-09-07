@@ -325,6 +325,7 @@ static inline int texenv_set_texture_texture(UNUSED struct ShaderProgram *prg) {
 }
 
 static bool gu_zmode_decal;
+static bool gu_tex_add; /* texture function ADD: texel + vertex colour (the kart tint, gfx_pc.c) */
 static void gfx_scegu_update_depth_offset(void);
 static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
     // If we have textures, Enable otherwise Disable
@@ -396,10 +397,30 @@ static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
          * texel * shade rgb, texel alpha -- for its transition screens.  MK64
          * shades real geometry with it: Rainbow Road's star guardrail is that
          * texture over yellow vertex colours and came out white, issue #10.) */
+        if (gu_tex_add) {
+            mode = GU_TFX_ADD; // Cv = Cf + Ct, Av = Af * At
+        }
         sceGuTexFunc(mode, GU_TCC_RGBA);
         dbg_texfunc = mode;
         GULOG("  gu: texfunc %d\n", mode);
     }
+}
+
+/* Switch the texture function between the shader's own and ADD (issue #15:
+ * the kart tint combiner).  Called between batches, inside the GE list. */
+void gfx_scegu_set_texfunc_add(bool on) {
+    if (gu_tex_add == on) return;
+    gu_tex_add = on;
+    if (cur_shader) {
+        cur_shader->enabled = false;
+        gfx_scegu_apply_shader(cur_shader);
+        cur_shader->enabled = false; // keep load_shader's always-re-send behaviour
+    }
+}
+/* State reset (gfx_overlay_state_dirty): forget ADD without touching the GE;
+ * the forced shader reload re-sends the texture function. */
+void gfx_scegu_reset_texfunc_add(void) {
+    gu_tex_add = false;
 }
 
 static void gfx_scegu_unload_shader(struct ShaderProgram *old_prg) {

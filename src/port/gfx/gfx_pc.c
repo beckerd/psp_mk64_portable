@@ -226,6 +226,7 @@ static struct RenderingState {
     bool depth_mask;
     bool decal_mode;
     bool alpha_blend;
+    bool tex_add; // backend texture function is ADD (texel + vertex colour)
 } rendering_state __attribute__((aligned(16)));
 
 struct GfxDimensions gfx_current_dimensions __attribute__((aligned(4)));
@@ -259,6 +260,7 @@ static struct {
     bool needs_lod;
     uint8_t mirror;                        // the bound texture was imported doubled (see gfx_mirror_flags)
     bool use_fog;                          // cycle-1 blender is CLR_FOG * A_SHADE: lerp the colour to the fog colour
+    bool tex_add;                          // GE ADD: texel + const_color (see the tint combiner in gfx_tri_rebuild_state)
     struct RGBA const_color;
 } tri_state;
 
@@ -1952,9 +1954,41 @@ static void gfx_tri_rebuild_state(struct LoadedVertex *v1) {
     tri_state.color_mode = comb->color_mode;
     tri_state.alpha_255 = comb->alpha_255;
     tri_state.needs_lod = comb->needs_lod;
+    // "(1 - X) * TEXEL0 + Y", Y a constant colour input: MK64's kart tint,
+    // (1 - ENV) * TEXEL0 + PRIM (func_8004B614).  The star and lightning cycle
+    // PRIM; shadows and the Luigi Raceway tunnel raise ENV.  Evaluating the
+    // combiner with TEXEL0 = 1 saturates the vertex colour to white and the
+    // GE's modulate then drops the tint entirely (issue #15).  With a non-zero
+    // Y draw texel + Y through the GE's ADD function with Y as the vertex
+    // colour: exact for X = 0, the only case the game tints in.
+    {
+        bool add = false;
+        uint32_t bits = cc_id & 0xfff;
+        uint8_t a = bits & 7, c = (bits >> 6) & 7, d = (bits >> 9) & 7;
+        if (comb->color_mode == 1 && a == CC_0 && ((cc_id >> 28) & 1) && c == CC_TEXEL0 && (d == CC_PRIM || d == CC_ENV) &&
+            !((cc_id >> 30) & 1)) {
+            const struct RGBA *y = d == CC_PRIM ? &rdp.prim_color : &rdp.env_color;
+            if ((y->r | y->g | y->b) != 0) {
+                add = true;
+            }
+        }
+        tri_state.tex_add = add;
+        if (add != rendering_state.tex_add) {
+            extern void gfx_scegu_set_texfunc_add(bool on);
+            gfx_flush();
+            gfx_scegu_set_texfunc_add(add);
+            rendering_state.tex_add = add;
+        }
+    }
     if (comb->color_mode == 1) {
         struct RGBA dummy = { 0, 0, 0, 0 };
         gfx_eval_vertex_color(cc_id, &dummy, 0, &tri_state.const_color);
+        if (tri_state.tex_add) {
+            const struct RGBA *y = (((cc_id >> 9) & 7) == CC_PRIM) ? &rdp.prim_color : &rdp.env_color;
+            tri_state.const_color.r = y->r;
+            tri_state.const_color.g = y->g;
+            tri_state.const_color.b = y->b; // alpha stays the combiner's (PRIM_A * TEXEL0_A -> GE: Af * At)
+        }
     }
     tri_state.valid = true;
     (void) v1;
@@ -3505,6 +3539,11 @@ void gfx_overlay_state_dirty(void) {
     rendering_state.depth_mask = false;
     rendering_state.decal_mode = false;
     rendering_state.alpha_blend = true;
+    rendering_state.tex_add = false;
+    {
+        extern void gfx_scegu_reset_texfunc_add(void);
+        gfx_scegu_reset_texfunc_add(); // no GE call: the shader reload re-sends the texture function
+    }
     rendering_state.textures[0] = rendering_state.textures[1] = NULL;
     memset(&rendering_state.viewport, 0, sizeof(rendering_state.viewport));
     memset(&rendering_state.scissor, 0, sizeof(rendering_state.scissor));
