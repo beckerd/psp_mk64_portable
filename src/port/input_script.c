@@ -179,6 +179,9 @@ void port_input_script(OSContPad* pad) {
 #ifdef PORT_STRAIGHT_RACE
         || (sFrame >= 1290 && sFrame <= 1760 && (sFrame % 15) == 0) || sFrame == 1331 || sFrame == 1601
 #endif
+#ifdef PORT_COURSE_TEST
+        || (gPortForceCourse == 9 && sFrame > 1700 && sFrame <= 3000 && (sFrame % 30) == 0) /* the finish and the results screen */
+#endif
         ) {
         port_screenshot((int) sFrame);
         if (gGamestate == RACING && gPlayerOne != NULL) {
@@ -224,29 +227,51 @@ void port_input_script(OSContPad* pad) {
         gfx_colorflush = (sFrame == 1600); /* shot1601 shows every batch in its own colour */
     }
 #endif
-    /* Issue #11 stadium TV screens: on Wario Stadium (14) / Luigi Raceway (8)
-     * drop the kart onto the track facing the screen at frame 1400, then hold
-     * A with the stick centred so the 1410..1700 screenshots approach it. */
-    if (gGamestate == RACING && gPlayerOne != NULL && (gPortForceCourse == 14 || gPortForceCourse == 8 || gPortForceCourse == 7)) {
-        if (sFrame == 1400) {
-            extern f32 get_surface_height(f32 posX, f32 posY, f32 posZ);
-            Player* p = gPlayerOne;
-            /* 14 Wario Stadium / 8 Luigi Raceway: the stadium TV screen; 7 Royal Raceway: the dash pad ramp (issue #8). */
-            f32 x = gPortForceCourse == 14 ? -1356.0f : gPortForceCourse == 7 ? 1417.0f : -1242.0f;
-            f32 y = gPortForceCourse == 14 ? -69.0f : gPortForceCourse == 7 ? 0.0f : -53.0f;
-            f32 z = gPortForceCourse == 14 ? 345.0f : gPortForceCourse == 7 ? -2387.0f : -1879.0f;
-            /* yaw = atan2(-dx, dz) * 65536 / 2pi, precomputed (0x8000 = -z as on the start line). */
-            s16 yaw = gPortForceCourse == 14 ? 0 : gPortForceCourse == 7 ? 11429 : -10423;
-            p->pos[0] = p->oldPos[0] = x;
-            p->pos[2] = p->oldPos[2] = z;
-            p->pos[1] = p->oldPos[1] = get_surface_height(x, y + 50.0f, z) + p->boundingBoxSize;
-            p->velocity[0] = p->velocity[1] = p->velocity[2] = 0.0f;
-            p->rotation[1] = yaw;
-            PORT_LOG("script f%u: warp (%.0f %.0f %.0f) yaw %d\n", sFrame, p->pos[0], p->pos[1], p->pos[2], p->rotation[1]);
+    /* Debug warps (frame 1400): drop the kart onto the track facing a feature,
+     * then hold A with the stick centred so the 1410.. screenshots show it.
+     *   14 Wario Stadium / 8 Luigi Raceway: the stadium TV screen (issue #11)
+     *   7 Royal Raceway: the dash pad ramp (issue #13)
+     *   9 Moo Moo Farm: the last stretch with two laps already counted, so the
+     *     race ends within seconds and the results screen follows (issue #14)
+     * yaw = atan2(-dx, dz) * 65536 / 2pi, precomputed (0x8000 = -z as on the start line). */
+    {
+        static const struct { s32 course; f32 x, y, z; s16 yaw; u32 holdA; s32 laps; } sWarps[] = {
+            { 14, -1356.0f, -69.0f, 345.0f, 0, 1470, -1 },
+            { 8, -1242.0f, -53.0f, -1879.0f, -10423, 1470, -1 },
+            { 7, 1417.0f, 0.0f, -2387.0f, 11429, 1600, -1 },
+            { 9, 147.0f, 0.0f, 782.0f, 28537, 1700, 2 },
+        };
+        u32 w;
+        for (w = 0; w < ARRAY_COUNT(sWarps); w++) {
+            if (sWarps[w].course != gPortForceCourse || gGamestate != RACING || gPlayerOne == NULL) continue;
+            if (sFrame == 1400) {
+                extern f32 get_surface_height(f32 posX, f32 posY, f32 posZ);
+                Player* p = gPlayerOne;
+                p->pos[0] = p->oldPos[0] = sWarps[w].x;
+                p->pos[2] = p->oldPos[2] = sWarps[w].z;
+                p->pos[1] = p->oldPos[1] = get_surface_height(sWarps[w].x, sWarps[w].y + 50.0f, sWarps[w].z) + p->boundingBoxSize;
+                p->velocity[0] = p->velocity[1] = p->velocity[2] = 0.0f;
+                p->rotation[1] = sWarps[w].yaw;
+                if (sWarps[w].laps >= 0) gLapCountByPlayerId[0] = sWarps[w].laps;
+                PORT_LOG("script f%u: warp (%.0f %.0f %.0f) yaw %d laps %d\n", sFrame, p->pos[0], p->pos[1], p->pos[2], p->rotation[1], gLapCountByPlayerId[0]);
+            }
+            if (sFrame >= 1400 && sFrame <= 1700) {
+                pad->button = (sFrame <= sWarps[w].holdA) ? A_BUTTON : 0;
+                pad->stick_x = pad->stick_y = 0;
+            }
         }
-        if (sFrame >= 1400 && sFrame <= 1700) {
-            pad->button = (sFrame <= (gPortForceCourse == 7 ? 1600 : 1470)) ? A_BUTTON : 0; // roll up to the screen / ramp, then coast
-            pad->stick_x = pad->stick_y = 0;
+    }
+    /* Issue #15: on Mario Raceway (0) give the kart a star at frame 1450 and
+     * trace frame 1500 (the kart tint combiner, the sparkles). */
+    if (gPortForceCourse == 0 && gGamestate == RACING && gPlayerOne != NULL) {
+        if (sFrame == 1450) {
+            gPlayerOne->triggers |= STAR_TRIGGER;
+            PORT_LOG("script f%u: star\n", sFrame);
+        }
+        if (sFrame == 1500) {
+            extern int gfx_debug_frame, gfx_trace_frames;
+            gfx_debug_frame = 1;
+            gfx_trace_frames = 1;
         }
     }
     if (sFrame == 1441 && gPortForceCourse >= 0) {
