@@ -578,17 +578,35 @@ static float hud_shift(int cls) {
     float spare = (float) gfx_current_dimensions.width - (2.0f * HALF_SCREEN_WIDTH) * hud_scale();
     return cls == HUD_CLASS_LEFT ? 0.0f : cls == HUD_CLASS_RIGHT ? spare : spare * 0.5f;
 }
+/* The previous element's extent and class: an element drawn over or against
+ * it belongs to it (a rank digit on a results-screen portrait, the dots on
+ * the map) and must go to the same side, whatever side its own centre says.
+ * Issue #14: Toad's "5" on the results screen was classed RIGHT while his
+ * portrait stayed CENTRE and landed a slot away, next to Bowser. */
+static float hud_prev_x0, hud_prev_x1;
+static int hud_prev_class = -1;
 /* x0/x1: horizontal extent in the game's 320-wide layout space. */
 static int hud_class(float x0, float x1) {
     float c;
-    if (x0 <= 1.0f && x1 >= 2.0f * HALF_SCREEN_WIDTH - 1.0f) return HUD_CLASS_FULL;
-    if (gfx_hud_anchor == 2) return HUD_CLASS_CENTRE; /* menus: the 4:3 layout centred over the stretched background */
-    /* Only elements sitting on the centre line (item box, GO!/FINISH) stay
-     * centred; everything else follows its side.  A narrow band keeps
-     * multi-sprite elements (LAP + digits, TIME + digits) together and lets the
-     * lap counter slide in from off-screen without changing class. */
-    c = 0.5f * (x0 + x1) - HALF_SCREEN_WIDTH;
-    return c < -24.0f ? HUD_CLASS_LEFT : c > 24.0f ? HUD_CLASS_RIGHT : HUD_CLASS_CENTRE;
+    int cls;
+    if (x0 <= 1.0f && x1 >= 2.0f * HALF_SCREEN_WIDTH - 1.0f) {
+        cls = HUD_CLASS_FULL;
+    } else if (gfx_hud_anchor == 2) {
+        cls = HUD_CLASS_CENTRE; /* menus: the 4:3 layout centred over the stretched background */
+    } else if (hud_prev_class >= 0 && hud_prev_class != HUD_CLASS_FULL && x0 < hud_prev_x1 - 2.0f && x1 > hud_prev_x0 + 2.0f) {
+        cls = hud_prev_class; /* drawn over the previous element: stay with it */
+    } else {
+        /* Only elements sitting on the centre line (item box, GO!/FINISH) stay
+         * centred; everything else follows its side.  A narrow band keeps
+         * multi-sprite elements (LAP + digits, TIME + digits) together and lets the
+         * lap counter slide in from off-screen without changing class. */
+        c = 0.5f * (x0 + x1) - HALF_SCREEN_WIDTH;
+        cls = c < -24.0f ? HUD_CLASS_LEFT : c > 24.0f ? HUD_CLASS_RIGHT : HUD_CLASS_CENTRE;
+    }
+    hud_prev_x0 = x0;
+    hud_prev_x1 = x1;
+    hud_prev_class = cls;
+    return cls;
 }
 static float ge_last_mp[4][4];
 static uint32_t ge_list_used; /* bytes written to the GE list since the last (re)start */
@@ -3500,6 +3518,7 @@ void gfx_start_frame(void) {
     memset(ge_last_mp, 0, sizeof(ge_last_mp)); // GE list reset each frame -> re-push GU_PROJECTION on the first batch
     ge_list_used = 0;
     gfx_hud_anchor = 0;
+    hud_prev_class = -1;
 #endif
     gfx_flush_index = 0;
     // Recycle the texture arena between frames (the previous frame's display
