@@ -313,7 +313,7 @@ static void poll(void) {
  * frame 0.  data/netrole.bin (scripted tests): 0x1N = choose HOST, 2..4 =
  * choose JOIN, by itself.
  * ------------------------------------------------------------------------ */
-static int sChoice, sAuto;
+static int sChoice, sAuto, sCancelSel; /* sCancelSel: the CANCEL line is highlighted in the waiting states */
 static u32 sLastAdvertUs;
 static char sErr[64];
 
@@ -424,6 +424,7 @@ void port_net_lobby_open(void) {
         if ((c & 0xF0) == 0x10) sAuto = 1;         /* host, by itself */
         else if (c >= 2 && c <= NET_MAX_PLAYERS) sAuto = 2; /* join, by itself */
     }
+    sCancelSel = 0;
     sLobby = LOBBY_CHOICE;
     PORT_LOG("net: lobby: %d players, mode %d, class %d%s\n", sCritPlayers, sCritMode, sCritCc, sAuto == 1 ? " (auto host)" : sAuto == 2 ? " (auto join)" : "");
 }
@@ -451,7 +452,8 @@ void port_net_lobby_update(void) {
             break;
         case LOBBY_HOSTING: {
             int s, n = 0;
-            if (pressed & B_BUTTON) { lobby_cancel(); break; }
+            if (pressed & (U_JPAD | D_JPAD)) sCancelSel = (pressed & D_JPAD) ? 1 : 0;
+            if ((pressed & B_BUTTON) || ((pressed & A_BUTTON) && sCancelSel)) { lobby_cancel(); break; }
             poll();
             if (now - sLastAdvertUs >= 500000) { send_advert(); sLastAdvertUs = now; }
             for (s = 1; s < sPlayers; s++) n += sKnown[s];
@@ -468,7 +470,8 @@ void port_net_lobby_update(void) {
             break;
         }
         case LOBBY_SEARCHING:
-            if (pressed & B_BUTTON) { lobby_cancel(); break; }
+            if (pressed & (U_JPAD | D_JPAD)) sCancelSel = (pressed & D_JPAD) ? 1 : 0;
+            if ((pressed & B_BUTTON) || ((pressed & A_BUTTON) && sCancelSel)) { lobby_cancel(); break; }
             poll();
             if (sHaveHost && now - sLastHelloUs >= 500000) { send_hello(); sLastHelloUs = now; }
             break;
@@ -489,10 +492,20 @@ static const char* cc_name(int mode, int cc) {
     switch (cc) { case 0: return "50CC"; case 1: return "100CC"; case 2: return "150CC"; default: return "EXTRA"; }
 }
 
-/* After the menu render (main.c): the modal over the frozen game select. */
+/* After the menu render (main.c): the modal over the frozen game select.
+ * Heading 1.0, subheading 0.75, status 0.65, menu lines 0.9; everything
+ * inside the box. */
+#define LB_X0 56
+#define LB_Y0 58
+#define LB_X1 264
+#define LB_Y1 198
+static void lobby_line(int y, const char* text, f32 scale, int colour) {
+    set_text_color(colour);
+    print_text1_center_mode_1((LB_X0 + LB_X1) / 2, y, (char*) text, 1, scale, scale);
+}
 void port_net_lobby_draw(void) {
     char line[48];
-    int s, n = 0, y;
+    int s, n = 0;
     if (sLobby == LOBBY_NONE) return;
 #ifdef PORT_INPUT_SCRIPT
     { /* debug: one screenshot per lobby state (a frame after it first draws) */
@@ -501,47 +514,37 @@ void port_net_lobby_draw(void) {
     }
 #endif
     /* The fades use the same translucent box over the whole screen. */
-    gDisplayListHead = draw_box(gDisplayListHead, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0xA0);
-    gDisplayListHead = draw_box(gDisplayListHead, 52, 62, 268, 182, 0, 0, 0, 0xD0);
-    set_text_color(TEXT_YELLOW);
-    print_text1_center_mode_1(160, 72, "AD HOC PLAY", 1, 1.0f, 1.0f);
-    set_text_color(TEXT_BLUE);
+    gDisplayListHead = draw_box(gDisplayListHead, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0x90);
+    gDisplayListHead = draw_box(gDisplayListHead, LB_X0, LB_Y0, LB_X1, LB_Y1, 0, 0, 0, 0xE0);
+    lobby_line(LB_Y0 + 12, "AD HOC PLAY", 1.0f, TEXT_YELLOW);
     snprintf(line, sizeof(line), "%dP %s %s", sCritPlayers, mode_name(sCritMode), cc_name(sCritMode, sCritCc));
-    print_text1_center_mode_1(160, 90, line, 1, 0.8f, 0.8f);
+    lobby_line(LB_Y0 + 32, line, 0.75f, TEXT_BLUE);
     switch (sLobby) {
         case LOBBY_CHOICE: {
-            static const char* items[3] = { "HOST A RACE", "JOIN A RACE", "CANCEL" };
-            for (s = 0, y = 116; s < 3; s++, y += 18) {
-                set_text_color(s == sChoice ? TEXT_YELLOW : TEXT_BLUE);
-                print_text1_center_mode_1(160, y, (char*) items[s], 1, 0.9f, 0.9f);
+            static const char* items[3] = { "HOST RACE", "JOIN RACE", "CANCEL" };
+            for (s = 0; s < 3; s++) {
+                lobby_line(LB_Y0 + 62 + s * 20, items[s], 0.9f, s == sChoice ? TEXT_YELLOW : TEXT_BLUE);
             }
             break;
         }
         case LOBBY_CONNECT_HOST:
         case LOBBY_CONNECT_JOIN:
-            set_text_color(TEXT_YELLOW);
-            print_text1_center_mode_1(160, 124, "STARTING WLAN", 1, 1.0f, 1.0f);
+            lobby_line(LB_Y0 + 76, "STARTING WLAN...", 0.65f, TEXT_YELLOW);
             break;
         case LOBBY_HOSTING:
             for (s = 1; s < sPlayers; s++) n += sKnown[s];
-            snprintf(line, sizeof(line), "WAITING FOR %d MORE PLAYER%s", sPlayers - 1 - n, sPlayers - 1 - n == 1 ? "" : "S");
-            set_text_color(TEXT_YELLOW);
-            print_text1_center_mode_1(160, 118, line, 1, 0.9f, 0.9f);
-            set_text_color(TEXT_BLUE);
-            print_text1_center_mode_1(160, 150, "SQUARE  CANCEL", 1, 0.8f, 0.8f);
+            snprintf(line, sizeof(line), "WAITING FOR %d PLAYER%s", sPlayers - 1 - n, sPlayers - 1 - n == 1 ? "" : "S");
+            lobby_line(LB_Y0 + 66, line, 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 108, "CANCEL", 0.9f, sCancelSel ? TEXT_YELLOW : TEXT_BLUE);
             break;
         case LOBBY_SEARCHING:
-            set_text_color(TEXT_YELLOW);
-            print_text1_center_mode_1(160, 118, sHaveHost ? "JOINING" : "SEARCHING", 1, 1.0f, 1.0f);
-            set_text_color(TEXT_BLUE);
-            print_text1_center_mode_1(160, 150, "SQUARE  CANCEL", 1, 0.8f, 0.8f);
+            lobby_line(LB_Y0 + 66, sHaveHost ? "JOINING..." : "SEARCHING...", 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 108, "CANCEL", 0.9f, sCancelSel ? TEXT_YELLOW : TEXT_BLUE);
             break;
         case LOBBY_ERROR:
-            set_text_color(TEXT_RED);
-            print_text1_center_mode_1(160, 118, "WLAN FAILED", 1, 1.0f, 1.0f);
-            set_text_color(TEXT_BLUE);
-            print_text1_center_mode_1(160, 136, sErr, 1, 0.6f, 0.6f);
-            print_text1_center_mode_1(160, 156, "SQUARE  BACK", 1, 0.8f, 0.8f);
+            lobby_line(LB_Y0 + 62, "WLAN FAILED", 0.9f, TEXT_RED);
+            lobby_line(LB_Y0 + 80, sErr, 0.55f, TEXT_BLUE);
+            lobby_line(LB_Y0 + 108, "BACK", 0.9f, TEXT_YELLOW);
             break;
     }
 }
