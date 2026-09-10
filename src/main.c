@@ -993,6 +993,15 @@ void game_state_handler(void) {
         case COURSE_SELECT_MENU_FROM_QUIT:
             // Display black
             osViBlack(0);
+#ifdef PORT_NET
+            if (port_net_lobby_active()) {
+                port_net_lobby_update(); // the modal over the frozen game select (docs/adhoc.md)
+                init_rcp();
+                func_80094A64(gGfxPool);
+                port_net_lobby_draw();
+                break;
+            }
+#endif
             PORT_TRACE("  update_menus\n");
             update_menus();
             PORT_TRACE("  init_rcp\n");
@@ -1347,7 +1356,10 @@ void port_audio_frame(void) {
 #endif
 }
 
+int gPortTraceArm; /* debug: set to re-arm the per-phase trace for a few frames */
 void port_game_loop_one_iteration(void) {
+    if (gPortTraceArm) { sPortTraceFrames = gPortTraceArm; gPortTraceArm = 0; }
+    { static int n; if ((++n % 60) == 0) PORT_LOG("game: iteration %d (state %d menu %d)\n", n, gGamestate, gMenuSelection); }
     PORT_TRACE("iteration start (timer %d)\n", gGlobalTimer);
 #if PORT_ENABLE_AUDIO
     func_800CB2C4();

@@ -144,10 +144,16 @@ void port_input_script(OSContPad* pad) {
         }
     }
 #ifdef PORT_NET
-    /* In a lockstep session this script runs on every machine; the menu
-     * navigation (player count, mode, course) is the host's alone -- the game
-     * counts a Right on two pads as two presses (2P GAME became 3P GAME). */
-    if (port_net_local_slot() != 0) {
+    /* Both machines run this script and both navigate their own menus to the
+     * same race before the lobby; the lobby waits without input (netrole.bin
+     * picks HOST/JOIN) and the script's clock stops with it.  Once in a
+     * session the menu navigation is the host's alone -- the game counts a
+     * Right on two pads as two presses. */
+    if (port_net_lobby_active()) {
+        pad->button = 0; pad->stick_x = pad->stick_y = 0;
+        return;
+    }
+    if (port_net_active() && port_net_local_slot() != 0) {
         pad->button &= ~(R_JPAD | L_JPAD);
     }
 #endif
@@ -295,6 +301,7 @@ void port_input_script(OSContPad* pad) {
         gfx_trace_frames = 1;
     }
 #endif
+    if (sFrame == 482) { extern int gPortTraceArm; gPortTraceArm = 4; }
     if (sFrame == 481) {
         // One fully traced frame of the game-select screen (issue #5: the
         // GAME SELECT banner and the OPTION/DATA buttons do not draw).

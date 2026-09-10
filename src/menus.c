@@ -1477,6 +1477,13 @@ void main_menu_act(struct Controller* controller, u16 controllerIdx) {
                     break;
                 }
                 if (btnAndStick & A_BUTTON) {
+#ifdef PORT_NET
+                    if (gPlayerCount >= 2 && !port_net_active()) {
+                        play_sound2(SOUND_MENU_OK_CLICKED);
+                        port_net_lobby_open(); // ad hoc: HOST / JOIN; the transition follows when the race is full
+                        break;
+                    }
+#endif
                     func_8009E1C0();
                     play_sound2(SOUND_MENU_OK_CLICKED);
                     setup_selected_game_mode();

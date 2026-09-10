@@ -35,13 +35,28 @@ Files: `src/port/net/port_net.h` (API), `lockstep.c` (session),
 loop in `psp_main.c`.  Everything is behind `-DPORT_NET` plus one transport
 define.
 
-## Role selection (v1)
+## Starting a session: the lobby
 
-Hold L while the game starts to host, R to join; or put a byte in
-`data/netrole.bin` (1 host, 2..4 join, 0x12/0x13/0x14 host that starts by
-itself with 2/3/4 players -- that is how the scripted tests do it).  Nothing
-held: single player, the network code is idle.  The host's console shows the
-joiners; Cross starts the session.
+Every player sets up the race in the game's own menus: 2P/3P/4P GAME, the
+mode (Grand Prix, VS, Battle) and the class, then OK.  For two or more players
+the OK press opens a modal over the game select: HOST A RACE / JOIN A RACE /
+CANCEL (Up/Down, Cross, Square cancels at any point).
+
+- HOST loads the network modules, joins the ad hoc group and advertises the
+  race it set up (players, mode, class) twice a second, showing "WAITING FOR
+  N MORE PLAYERS".  Joiners whose race matches are given slots; when the
+  slots are full the host sends START and the game goes on.
+- JOIN loads the modules and listens for an advert that matches the race the
+  joiner set up ("SEARCHING"), asks that host for a slot ("JOINING") and waits
+  for START.
+- START carries the host's selections, RNG seed and menu timers; both
+  machines then make the OK transition into the character select in lockstep
+  frame 0 (host = pad 1, joiners = pads 2-4).  Character select, course
+  select, the race, pause and results all run in lockstep from there.
+
+Scripted tests pick the modal choice from `data/netrole.bin`: 0x12/0x13/0x14
+= HOST for a 2/3/4-player race, 2..4 = JOIN.  Nothing there: the modal waits
+for the pad.  A machine without a session plays single player as before.
 
 ## Milestones
 
@@ -75,10 +90,9 @@ joiners; Cross starts the session.
    portraits into its own layout every frame), the mini-map at 1P
    coordinates for slot 0, the kart shadows for slots 2-3 (func_80021B0C /
    func_80021C78 only cover two screens), the ceremony/results camera.
-4. **Lobby, 3-4 players, drop-outs** (done 2026-09-10): the host waits on the
-   boot console for 1-3 joiners and starts with Cross (or by itself once
-   `netrole.bin` = 0x10|n players are in, for scripted tests); START carries
-   the player count and the game's player-count menu is pinned to it.  The
+4. **Lobby, 3-4 players, drop-outs** (done 2026-09-10): the in-menu lobby
+   above (first version: the boot console with L/R held, replaced the same
+   day); START carries the selections, seed and timers.  The
    host relays every slot's inputs it knows (star on top of the broadcast),
    so client-to-client delivery is never required.  A slot the host has
    waited 10 s for is declared dropped from that frame on and reads as an

@@ -23,11 +23,13 @@
 #include <pspctrl.h>
 #include <pspdebug.h>
 #include <common_structs.h>
+#include <defines.h>
 #include "port_net.h"
 #include "../port.h"
 #include "main.h"
 #include "menus.h"
 #include "buffers.h"
+#include "menu_items.h"
 
 #define RING 128
 #define INPUT_DELAY 2
@@ -36,18 +38,21 @@
 #define NET_MAGIC 0xA7
 #define DROP_AFTER_US (10u * 1000000u)
 #define GIVEUP_AFTER_US (15u * 1000000u)
-enum { PKT_HELLO = 1, PKT_START = 2, PKT_INPUT = 3 };
+enum { PKT_HELLO = 1, PKT_START = 2, PKT_INPUT = 3, PKT_ADVERT = 4 };
 
 typedef struct { u16 button; s8 sx, sy; } NetInput;
 /* Naturally aligned (both machines run the same binary); no packing: a packed
  * u32 member would be an unaligned store on MIPS. */
-typedef struct {
+typedef struct NetPktTag {
     u8 magic, type, slot, count;
     u32 frame;       /* INPUT: frame of in[0].  START: 0 */
     u32 check_frame; /* latest state checksum the sender has */
     u32 checksum;
     u8 ids[NET_MAX_PLAYERS][NET_ID_LEN]; /* START: slot -> transport id */
-    u8 players, delay, dropped, pad;     /* dropped: bitmask (host's word) */
+    u8 players, delay, dropped, mode;    /* dropped: bitmask (host's word); mode/cc: the race (ADVERT/HELLO/START) */
+    u8 cc, pad0, pad1, pad2;
+    u16 seed, pad3;                      /* START: gRandomSeed16 */
+    s32 gtimer, flash, timing;           /* START: gGlobalTimer, gCycleFlashMenu, gMenuTimingCounter */
     u32 drop_frame[NET_MAX_PLAYERS];     /* first neutral frame per dropped slot */
     NetInput in[REDUNDANCY];
 } NetPkt;
@@ -65,6 +70,13 @@ static u8 sDropped;                          /* bitmask */
 static u32 sDropFrame[NET_MAX_PLAYERS];
 static u32 sStallSinceUs, sLastHostPktUs;    /* wall clock */
 static int sStallSlot = -1;
+static u8 sHostId[NET_ID_LEN];
+static u8 sCritPlayers, sCritMode, sCritCc;
+static int sLobby, sHaveHost;
+static u32 sLastHelloUs;
+enum { LOBBY_NONE, LOBBY_CHOICE, LOBBY_CONNECT_HOST, LOBBY_CONNECT_JOIN, LOBBY_HOSTING, LOBBY_SEARCHING, LOBBY_ERROR };
+static int criteria_match(const struct NetPktTag* p);
+static void session_begin(void);
 int gPortNetDesync;
 
 extern s32 gGlobalTimer;
@@ -99,7 +111,8 @@ static u32 state_checksum(void) {
 static int slot_of(const u8 id[NET_ID_LEN]) {
     int s;
     for (s = 0; s < NET_MAX_PLAYERS; s++) {
-        if ((s == 0 || sKnown[s] || sRole == NET_ROLE_CLIENT) && memcmp(sIds[s], id, NET_ID_LEN) == 0) return s;
+        if ((s == 0 || sKnown[s] || sRole == NET_ROLE_CLIENT) && (s < sPlayers || sRole == NET_ROLE_CLIENT) &&
+            memcmp(sIds[s], id, NET_ID_LEN) == 0) return s;
     }
     return -1;
 }
@@ -144,7 +157,8 @@ static void send_hello(void) {
     NetPkt p;
     memset(&p, 0, sizeof(p));
     p.type = PKT_HELLO;
-    p.slot = (u8) sSlot;
+    p.players = sCritPlayers; p.mode = sCritMode; p.cc = sCritCc;
+    memcpy(p.ids[0], sHostId, NET_ID_LEN); /* the host we mean */
     send_pkt(&p);
 }
 
@@ -205,15 +219,29 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
     if (p->magic != NET_MAGIC) return;
     from_host = memcmp(sIds[0], from, NET_ID_LEN) == 0;
     if (from_host && sRole == NET_ROLE_CLIENT) sLastHostPktUs = now_us();
+    if (p->type == PKT_ADVERT) {
+        if (sRole != NET_ROLE_CLIENT || sRunning || sLobby != LOBBY_SEARCHING) return;
+        if (!criteria_match(p) || memcmp(p->ids[0], from, NET_ID_LEN) != 0) return;
+        if (!sHaveHost) {
+            memcpy(sHostId, from, NET_ID_LEN);
+            memcpy(sIds[0], from, NET_ID_LEN);
+            sHaveHost = 1;
+            PORT_LOG("net: found a matching race at %02X%02X%02X%02X%02X%02X\n", from[0], from[1], from[2], from[3], from[4], from[5]);
+            send_hello();
+            sLastHelloUs = now_us();
+        }
+        return;
+    }
     if (p->type == PKT_HELLO) {
         if (sRole != NET_ROLE_HOST) return;
+        if (!criteria_match(p) || memcmp(p->ids[0], sIds[0], NET_ID_LEN) != 0) return; /* another race, or not for us */
         slot = slot_of(from);
         if (slot < 0) {
             if (sRunning) return; /* no late joins */
-            for (slot = 1; slot < NET_MAX_PLAYERS; slot++) {
+            for (slot = 1; slot < sPlayers; slot++) {
                 if (!sKnown[slot]) { memcpy(sIds[slot], from, NET_ID_LEN); sKnown[slot] = 1; break; }
             }
-            if (slot >= NET_MAX_PLAYERS) return; /* full */
+            if (slot >= sPlayers) return; /* full */
             PORT_LOG("net: peer %02X%02X%02X%02X%02X%02X -> slot %d\n", from[0], from[1], from[2], from[3], from[4], from[5], slot);
         }
         if (sRunning) send_start(); /* a late/lost START */
@@ -224,13 +252,20 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
         /* Before START we do not know the host's id: the packet carries it. */
         if (memcmp(p->ids[0], from, NET_ID_LEN) != 0) return;
         if (sRunning) { apply_drops(p); return; }
+        if (sLobby != LOBBY_SEARCHING || !sHaveHost || memcmp(sHostId, from, NET_ID_LEN) != 0) return;
         sPlayers = p->players;
         memcpy(sIds, p->ids, sizeof(sIds));
         slot = slot_of(net_transport_local_id());
         if (slot < 0) { PORT_LOG("net: START without our id\n"); return; }
         sSlot = slot;
-        sRunning = 1;
+        /* The host's state at its OK press: what the character select and
+         * everything after it derive from. */
+        gRandomSeed16 = p->seed;
+        gGlobalTimer = p->gtimer;
+        gCycleFlashMenu = p->flash;
+        gMenuTimingCounter = p->timing;
         PORT_LOG("net: START: %d players, we are slot %d\n", sPlayers, sSlot);
+        session_begin();
         return;
     }
     if (p->type == PKT_INPUT) {
@@ -268,84 +303,250 @@ static void poll(void) {
     }
 }
 
-/* data/netrole.bin: 1 host (the lobby: Cross starts), 2..4 join, 0x10|n host
- * that starts by itself once n players are in (scripted tests).  Buttons: L
- * held at boot hosts, R joins. */
-static int pick_role(void) {
-    FILE* f = fopen(port_save_path("netrole.bin"), "rb");
-    SceCtrlData d;
+/* ----------------------------------------------------------------------------
+ * The lobby.  Opened by the game-select OK press for 2-4 players
+ * (menus.c): a modal over the frozen menu -- HOST / JOIN / CANCEL.  The host
+ * advertises the race it set up (players, mode, class); a joiner that set up
+ * the same race finds it and asks for a slot; once the slots are full the
+ * host sends START with its selections, RNG seed and timers, and every
+ * machine makes the OK transition into the character select in lockstep
+ * frame 0.  data/netrole.bin (scripted tests): 0x1N = choose HOST, 2..4 =
+ * choose JOIN, by itself.
+ * ------------------------------------------------------------------------ */
+static int sChoice, sAuto;
+static u32 sLastAdvertUs;
+static char sErr[64];
+
+extern void func_8009E1C0(void);
+extern void setup_selected_game_mode(void);
+extern s8 gGameModeMenuColumn[];
+extern s8 gGameModeSubMenuColumn[4][3];
+extern s32 gCycleFlashMenu;
+extern s32 gMenuTimingCounter;
+
+static void criteria_now(void) {
+    int n = gPlayerCount < 1 ? 1 : gPlayerCount > 4 ? 4 : gPlayerCount;
+    sCritPlayers = (u8) n;
+    sCritMode = (u8) gModeSelection;
+    sCritCc = (u8) gGameModeSubMenuColumn[n - 1][gGameModeMenuColumn[n - 1]];
+}
+
+static int criteria_match(const NetPkt* p) {
+    return p->players == sCritPlayers && p->mode == sCritMode && p->cc == sCritCc;
+}
+
+static void session_reset(void) {
+    int i, s;
+    NetInput neutral = { 0, 0, 0 };
+    sRunning = 0; sFrame = 0; sDropped = 0; sStalls = 0; sLastStallLog = 0; sStallSlot = -1;
+    memset(sHave, 0xFF, sizeof(sHave));
+    memset(sKnown, 0, sizeof(sKnown));
+    memset(sIds, 0, sizeof(sIds));
+    for (i = 0; i < 16; i++) sMyCheck[i].frame = ~0u;
+    for (s = 0; s < NET_MAX_PLAYERS; s++) {
+        sLastReported[s] = 0; sDropFrame[s] = 0;
+        for (i = 0; i < INPUT_DELAY; i++) store_input(s, (u32) i, &neutral); /* nobody's input exists for the first frames */
+    }
+}
+
+/* Both machines: the OK press's transition, in lockstep frame 0.  This runs
+ * inside a game iteration (the menu update), so the iteration's frame_end
+ * must not count it: frame 0 begins with the next iteration's frame_begin. */
+static int sBeganMidIteration;
+static void session_begin(void) {
+    sRunning = 1;
+    sBeganMidIteration = 1;
+    sLastHostPktUs = now_us();
+    sLobby = LOBBY_NONE;
+    PORT_LOG("net: session started: %d players, slot %d, delay %d, seed %04X timer %d\n", sPlayers, sSlot, INPUT_DELAY, gRandomSeed16, (int) gGlobalTimer);
+    func_8009E1C0();
+    setup_selected_game_mode();
+}
+
+static void fill_sync(NetPkt* p) {
+    p->players = (u8) sPlayers;
+    p->mode = sCritMode;
+    p->cc = sCritCc;
+    p->seed = gRandomSeed16;
+    p->gtimer = gGlobalTimer;
+    p->flash = gCycleFlashMenu;
+    p->timing = gMenuTimingCounter;
+}
+
+static void send_advert(void) {
+    NetPkt p;
+    memset(&p, 0, sizeof(p));
+    p.type = PKT_ADVERT;
+    p.players = sCritPlayers; p.mode = sCritMode; p.cc = sCritCc;
+    memcpy(p.ids[0], net_transport_local_id(), NET_ID_LEN);
+    send_pkt(&p);
+}
+
+static void lobby_transport(int host) {
+    if (!net_transport_init(host ? NET_ROLE_HOST : NET_ROLE_CLIENT, "MK64")) {
+        snprintf(sErr, sizeof(sErr), "%s", net_transport_status());
+        PORT_LOG("net: transport init failed: %s\n", sErr);
+        sLobby = LOBBY_ERROR;
+        return;
+    }
+    session_reset();
+    if (host) {
+        sRole = NET_ROLE_HOST; sSlot = 0; sPlayers = sCritPlayers;
+        memcpy(sIds[0], net_transport_local_id(), NET_ID_LEN);
+        sKnown[0] = 1;
+        sLobby = LOBBY_HOSTING;
+    } else {
+        sRole = NET_ROLE_CLIENT; sHaveHost = 0;
+        sLobby = LOBBY_SEARCHING;
+    }
+    sLastAdvertUs = sLastHelloUs = 0;
+}
+
+static void lobby_cancel(void) {
+    if (sLobby == LOBBY_HOSTING || sLobby == LOBBY_SEARCHING || sLobby == LOBBY_ERROR) {
+        net_transport_term();
+    }
+    sRole = NET_ROLE_NONE;
+    session_reset();
+    sLobby = LOBBY_NONE;
+    PORT_LOG("net: lobby cancelled\n");
+}
+
+void port_net_lobby_open(void) {
+    FILE* f;
+    criteria_now();
+    sChoice = 0;
+    sAuto = 0;
+    f = fopen(port_save_path("netrole.bin"), "rb");
     if (f != NULL) {
         int c = fgetc(f);
         fclose(f);
-        if (c == 1) return NET_ROLE_HOST;
-        if (c >= 2 && c <= NET_MAX_PLAYERS) return c;
-        if ((c & 0xF0) == 0x10 && (c & 0x0F) >= 2 && (c & 0x0F) <= NET_MAX_PLAYERS) { sAutoStart = c & 0x0F; return NET_ROLE_HOST; }
+        if ((c & 0xF0) == 0x10) sAuto = 1;         /* host, by itself */
+        else if (c >= 2 && c <= NET_MAX_PLAYERS) sAuto = 2; /* join, by itself */
     }
-    sceCtrlPeekBufferPositive(&d, 1);
-    if (d.Buttons & PSP_CTRL_LTRIGGER) return NET_ROLE_HOST;
-    if (d.Buttons & PSP_CTRL_RTRIGGER) return NET_ROLE_CLIENT;
-    return NET_ROLE_NONE;
+    sLobby = LOBBY_CHOICE;
+    PORT_LOG("net: lobby: %d players, mode %d, class %d%s\n", sCritPlayers, sCritMode, sCritCc, sAuto == 1 ? " (auto host)" : sAuto == 2 ? " (auto join)" : "");
 }
 
-int port_net_boot(void) {
-    int role = pick_role(), i, s, iter = 0, cross_was_down = 1;
-    NetInput neutral = { 0, 0, 0 };
-    if (role == NET_ROLE_NONE) return 1;
-    PORT_LOG("net: role %d\n", role);
-    sRole = role == NET_ROLE_HOST ? NET_ROLE_HOST : NET_ROLE_CLIENT;
-    sPlayers = NET_MAX_PLAYERS; /* while joining: any slot may fill; START fixes the count */
-    memset(sHave, 0xFF, sizeof(sHave));
-    for (i = 0; i < 16; i++) sMyCheck[i].frame = ~0u;
-    for (s = 0; s < NET_MAX_PLAYERS; s++) {
-        for (i = 0; i < INPUT_DELAY; i++) store_input(s, (u32) i, &neutral); /* nobody's input exists for the first frames */
-    }
-    pspDebugScreenSetXY(0, 2);
-    pspDebugScreenPrintf("MK64 Portable ad hoc: %s\n", sRole == NET_ROLE_HOST ? "hosting" : "joining");
-    if (!net_transport_init(role, "MK64")) {
-        pspDebugScreenPrintf("%s\n", net_transport_status());
-        PORT_LOG("net: transport init failed: %s\n", net_transport_status());
-        sceKernelDelayThread(3 * 1000 * 1000);
-        sRole = NET_ROLE_NONE;
-        return 1;
-    }
-    pspDebugScreenPrintf("%s\n", net_transport_status());
-    if (sRole == NET_ROLE_HOST) {
-        memcpy(sIds[0], net_transport_local_id(), NET_ID_LEN);
-        sKnown[0] = 1;
-        sSlot = 0;
-    }
-    while (!sRunning) {
-        poll();
-        if (sRole == NET_ROLE_HOST) {
-            SceCtrlData d;
-            int n = 0, start = 0;
-            for (s = 1; s < NET_MAX_PLAYERS; s++) n += sKnown[s];
-            sceCtrlPeekBufferPositive(&d, 1);
-            if (!(d.Buttons & PSP_CTRL_CROSS)) cross_was_down = 0;
-            if (n >= 1 && (d.Buttons & PSP_CTRL_CROSS) && !cross_was_down) start = 1; /* a fresh press */
-            if (sAutoStart && n >= sAutoStart - 1) start = 1;
-            if (n == NET_MAX_PLAYERS - 1) start = 1;
-            if (start) {
-                sPlayers = 1 + n;
-                sRunning = 1;
-                send_start();
-            } else if ((iter % 30) == 0) {
-                pspDebugScreenSetXY(0, 5);
-                pspDebugScreenPrintf("%d player(s) joined.  %s   ", n, n >= 1 ? "Press X to start." : "Waiting...");
+int port_net_lobby_active(void) { return sLobby != LOBBY_NONE; }
+
+void port_net_lobby_update(void) {
+    u16 pressed = gControllerOne->buttonPressed | gControllerOne->stickPressed;
+    u32 now = now_us();
+    switch (sLobby) {
+        case LOBBY_CHOICE:
+            if (sAuto) { sLobby = sAuto == 1 ? LOBBY_CONNECT_HOST : LOBBY_CONNECT_JOIN; break; }
+            if (pressed & (U_JPAD | D_JPAD)) sChoice = (pressed & U_JPAD) ? (sChoice + 2) % 3 : (sChoice + 1) % 3;
+            if (pressed & B_BUTTON) { lobby_cancel(); break; }
+            if (pressed & A_BUTTON) {
+                if (sChoice == 2) lobby_cancel();
+                else sLobby = sChoice == 0 ? LOBBY_CONNECT_HOST : LOBBY_CONNECT_JOIN; /* one frame of "starting" text first */
             }
-        } else {
-            if ((iter % 15) == 0) send_hello();
-            if ((iter % 30) == 0) { pspDebugScreenSetXY(0, 5); pspDebugScreenPrintf("waiting for the host to start...   "); }
+            break;
+        case LOBBY_CONNECT_HOST:
+            lobby_transport(1);
+            break;
+        case LOBBY_CONNECT_JOIN:
+            lobby_transport(0);
+            break;
+        case LOBBY_HOSTING: {
+            int s, n = 0;
+            if (pressed & B_BUTTON) { lobby_cancel(); break; }
+            poll();
+            if (now - sLastAdvertUs >= 500000) { send_advert(); sLastAdvertUs = now; }
+            for (s = 1; s < sPlayers; s++) n += sKnown[s];
+            if (n == sPlayers - 1) {
+                NetPkt p;
+                memset(&p, 0, sizeof(p));
+                p.type = PKT_START;
+                memcpy(p.ids, sIds, sizeof(sIds));
+                fill_sync(&p);
+                p.delay = INPUT_DELAY;
+                send_pkt(&p);
+                session_begin();
+            }
+            break;
         }
-        iter++;
-        sceKernelDelayThread(33 * 1000);
+        case LOBBY_SEARCHING:
+            if (pressed & B_BUTTON) { lobby_cancel(); break; }
+            poll();
+            if (sHaveHost && now - sLastHelloUs >= 500000) { send_hello(); sLastHelloUs = now; }
+            break;
+        case LOBBY_ERROR:
+            if (pressed & (A_BUTTON | B_BUTTON)) lobby_cancel();
+            break;
+        default:
+            break;
     }
-    sLastHostPktUs = now_us();
-    PORT_LOG("net: session started: %d players, slot %d, delay %d\n", sPlayers, sSlot, INPUT_DELAY);
-    pspDebugScreenSetXY(0, 6);
-    pspDebugScreenPrintf("connected: %d players, you are player %d\n", sPlayers, sSlot + 1);
-    return sPlayers;
 }
+
+static const char* mode_name(int mode) {
+    switch (mode) { case 0: return "GRAND PRIX"; case 1: return "TIME TRIALS"; case 2: return "VS"; case 3: return "BATTLE"; }
+    return "";
+}
+static const char* cc_name(int mode, int cc) {
+    if (mode == 3) return "";
+    switch (cc) { case 0: return "50CC"; case 1: return "100CC"; case 2: return "150CC"; default: return "EXTRA"; }
+}
+
+/* After the menu render (main.c): the modal over the frozen game select. */
+void port_net_lobby_draw(void) {
+    char line[48];
+    int s, n = 0, y;
+    if (sLobby == LOBBY_NONE) return;
+#ifdef PORT_INPUT_SCRIPT
+    { /* debug: one screenshot per lobby state (a frame after it first draws) */
+        static int shot[8], seen[8];
+        if (seen[sLobby]++ == 3 && !shot[sLobby]) { shot[sLobby] = 1; port_screenshot(8000 + sLobby); }
+    }
+#endif
+    /* The fades use the same translucent box over the whole screen. */
+    gDisplayListHead = draw_box(gDisplayListHead, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0xA0);
+    gDisplayListHead = draw_box(gDisplayListHead, 52, 62, 268, 182, 0, 0, 0, 0xD0);
+    set_text_color(TEXT_YELLOW);
+    print_text1_center_mode_1(160, 72, "AD HOC PLAY", 1, 1.0f, 1.0f);
+    set_text_color(TEXT_BLUE);
+    snprintf(line, sizeof(line), "%dP %s %s", sCritPlayers, mode_name(sCritMode), cc_name(sCritMode, sCritCc));
+    print_text1_center_mode_1(160, 90, line, 1, 0.8f, 0.8f);
+    switch (sLobby) {
+        case LOBBY_CHOICE: {
+            static const char* items[3] = { "HOST A RACE", "JOIN A RACE", "CANCEL" };
+            for (s = 0, y = 116; s < 3; s++, y += 18) {
+                set_text_color(s == sChoice ? TEXT_YELLOW : TEXT_BLUE);
+                print_text1_center_mode_1(160, y, (char*) items[s], 1, 0.9f, 0.9f);
+            }
+            break;
+        }
+        case LOBBY_CONNECT_HOST:
+        case LOBBY_CONNECT_JOIN:
+            set_text_color(TEXT_YELLOW);
+            print_text1_center_mode_1(160, 124, "STARTING WLAN", 1, 1.0f, 1.0f);
+            break;
+        case LOBBY_HOSTING:
+            for (s = 1; s < sPlayers; s++) n += sKnown[s];
+            snprintf(line, sizeof(line), "WAITING FOR %d MORE PLAYER%s", sPlayers - 1 - n, sPlayers - 1 - n == 1 ? "" : "S");
+            set_text_color(TEXT_YELLOW);
+            print_text1_center_mode_1(160, 118, line, 1, 0.9f, 0.9f);
+            set_text_color(TEXT_BLUE);
+            print_text1_center_mode_1(160, 150, "SQUARE  CANCEL", 1, 0.8f, 0.8f);
+            break;
+        case LOBBY_SEARCHING:
+            set_text_color(TEXT_YELLOW);
+            print_text1_center_mode_1(160, 118, sHaveHost ? "JOINING" : "SEARCHING", 1, 1.0f, 1.0f);
+            set_text_color(TEXT_BLUE);
+            print_text1_center_mode_1(160, 150, "SQUARE  CANCEL", 1, 0.8f, 0.8f);
+            break;
+        case LOBBY_ERROR:
+            set_text_color(TEXT_RED);
+            print_text1_center_mode_1(160, 118, "WLAN FAILED", 1, 1.0f, 1.0f);
+            set_text_color(TEXT_BLUE);
+            print_text1_center_mode_1(160, 136, sErr, 1, 0.6f, 0.6f);
+            print_text1_center_mode_1(160, 156, "SQUARE  BACK", 1, 0.8f, 0.8f);
+            break;
+    }
+}
+
+int port_net_boot(void) { return 1; } /* the session starts from the game select now */
 
 int port_net_active(void) { return sRole != NET_ROLE_NONE && sRunning; }
 int port_net_players(void) { return sPlayers; }
@@ -391,6 +592,7 @@ int port_net_frame_begin(void) {
     for (s = 0; s < sPlayers; s++) {
         if (!have_input(s, sFrame)) {
             u32 now = now_us();
+            if (s == sSlot) { PORT_LOG("net: BUG: no local input for frame %u\n", (unsigned) sFrame); store_input(s, sFrame, &in); continue; }
             if (sStallSlot != s) { sStallSlot = s; sStallSinceUs = now; }
             sStalls++;
             if (sStalls - sLastStallLog >= 200) { sLastStallLog = sStalls; PORT_LOG("net: frame %u waiting for slot %d (%u stalls so far)\n", (unsigned) sFrame, s, (unsigned) sStalls); }
@@ -429,6 +631,7 @@ void port_net_pads(OSContPad* pads) {
 }
 
 void port_net_frame_end(void) {
+    if (sBeganMidIteration) { sBeganMidIteration = 0; return; }
     sFrame++;
 }
 #endif

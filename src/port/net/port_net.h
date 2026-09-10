@@ -30,10 +30,13 @@ int net_transport_recv(void* buf, int max, u8 from[NET_ID_LEN]); /* bytes, 0 = n
 const char* net_transport_status(void);                          /* one line for the waiting screen */
 
 /* Session ------------------------------------------------------------------ */
-/* Before port_game_init(): pick the role (L held at boot = host, R = join, or
- * data/netrole.bin: 1 host, 2 join), connect and wait for the session to
- * start.  Returns the player count (1 = no network session). */
-int port_net_boot(void);
+int port_net_boot(void); /* nothing now: the session starts from the game select */
+/* The lobby (lockstep.c): opened by the game-select OK press for 2-4 players;
+ * while it is active the menu is frozen (main.c), updated and drawn by these. */
+void port_net_lobby_open(void);
+int port_net_lobby_active(void);
+void port_net_lobby_update(void);
+void port_net_lobby_draw(void);
 int port_net_active(void);
 int port_net_players(void);
 int port_net_local_slot(void);

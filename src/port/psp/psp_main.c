@@ -291,10 +291,6 @@ int main(UNUSED int argc, char** argv) {
     port_audio_out_init();
     PORT_LOG("boot\n");
 
-#ifdef PORT_NET
-    port_net_boot(); // ad hoc session (L/R held at boot, or data/netrole.bin); waits for the peers.
-                     // Before gfx_init: the debug console is the displayed buffer until then.
-#endif
     gfx_init(&gfx_psp, &gfx_opengl_api, "MK64 Portable", false);
     port_debug_selftest(); // PORT_GFX_SELFTEST builds only
 

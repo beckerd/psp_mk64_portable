@@ -154,6 +154,7 @@ void* port_seg_to_ptr(uintptr_t addr) {
 /* Logging                                                                    */
 /* ------------------------------------------------------------------------- */
 
+extern u32 port_time_us(void);
 void port_log(const char* fmt, ...) {
     char buf[256];
     va_list ap;
@@ -161,16 +162,29 @@ void port_log(const char* fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     fputs(buf, stdout);
-    /* Open, append, close per line: the PSP's FAT driver only updates the
-     * directory entry (the visible file size) on close, so a HOME exit or a
-     * crash used to leave log.txt truncated at the last close. */
+    /* The PSP's FAT driver only updates the directory entry (the visible file
+     * size) on close, so a HOME exit or a crash used to leave log.txt
+     * truncated at the last close.  Close and reopen at most twice a second:
+     * at most half a second of log can be lost, and a debug trace of
+     * thousands of lines does not pay an open per line (PPSSPP charges
+     * milliseconds each). */
     {
+        static FILE* sLog;
         static int sTruncated;
-        FILE* f = fopen(port_save_path("log.txt"), sTruncated ? "a" : "w");
-        sTruncated = 1;
-        if (f != NULL) {
-            fputs(buf, f);
-            fclose(f);
+        static u32 sLastClose;
+        u32 now = port_time_us();
+        if (sLog == NULL) {
+            sLog = fopen(port_save_path("log.txt"), sTruncated ? "a" : "w");
+            sTruncated = 1;
+        }
+        if (sLog != NULL) {
+            fputs(buf, sLog);
+            fflush(sLog);
+            if (now - sLastClose >= 500000u) {
+                fclose(sLog);
+                sLog = NULL;
+                sLastClose = now;
+            }
         }
     }
 }
