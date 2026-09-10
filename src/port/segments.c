@@ -158,8 +158,10 @@ extern u32 port_time_us(void);
 void port_log(const char* fmt, ...) {
     char buf[256];
     va_list ap;
+    u32 t = port_time_us();
+    int n = snprintf(buf, sizeof(buf), "[%u.%03u] ", (unsigned) (t / 1000000u), (unsigned) ((t / 1000u) % 1000u));
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
     va_end(ap);
     fputs(buf, stdout);
     /* The PSP's FAT driver only updates the directory entry (the visible file
@@ -174,6 +176,12 @@ void port_log(const char* fmt, ...) {
         static u32 sLastClose;
         u32 now = port_time_us();
         if (sLog == NULL) {
+            if (!sTruncated) { /* first open: keep the previous run's log next to this one */
+                char prev[256];
+                snprintf(prev, sizeof(prev), "%s", port_save_path("log_prev.txt"));
+                remove(prev);
+                rename(port_save_path("log.txt"), prev);
+            }
             sLog = fopen(port_save_path("log.txt"), sTruncated ? "a" : "w");
             sTruncated = 1;
         }

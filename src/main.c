@@ -1359,7 +1359,16 @@ void port_audio_frame(void) {
 int gPortTraceArm; /* debug: set to re-arm the per-phase trace for a few frames */
 void port_game_loop_one_iteration(void) {
     if (gPortTraceArm) { sPortTraceFrames = gPortTraceArm; gPortTraceArm = 0; }
-    { static int n; if ((++n % 60) == 0) PORT_LOG("game: iteration %d (state %d menu %d)\n", n, gGamestate, gMenuSelection); }
+    { /* a heartbeat every 60 iterations, and every phase change as it happens (a crash log ends with where it was) */
+        static int n, lastState = -1, lastMenu = -1, lastCourse = -1, lastRace = -1;
+        ++n;
+        if (gGamestate != lastState || gMenuSelection != lastMenu || gCurrentCourseId != lastCourse || gRaceState != lastRace) {
+            lastState = gGamestate; lastMenu = gMenuSelection; lastCourse = gCurrentCourseId; lastRace = gRaceState;
+            PORT_LOG("game: iteration %d: state %d menu %d course %d race %d players %d\n", n, gGamestate, gMenuSelection, gCurrentCourseId, gRaceState, gPlayerCount);
+        } else if ((n % 60) == 0) {
+            PORT_LOG("game: iteration %d (state %d menu %d)\n", n, gGamestate, gMenuSelection);
+        }
+    }
     PORT_TRACE("iteration start (timer %d)\n", gGlobalTimer);
 #if PORT_ENABLE_AUDIO
     func_800CB2C4();

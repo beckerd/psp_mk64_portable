@@ -454,6 +454,12 @@ int port_net_lobby_active(void) { return sLobby != LOBBY_NONE; }
 void port_net_lobby_update(void) {
     u16 pressed = gControllerOne->buttonPressed | gControllerOne->stickPressed;
     u32 now = now_us();
+    static int sLastLogged = -1;
+    if (sLobby != sLastLogged) {
+        static const char* names[] = { "none", "choice", "connect-host", "connect-join", "hosting", "searching", "error" };
+        sLastLogged = sLobby;
+        PORT_LOG("net: lobby -> %s\n", (unsigned) sLobby < 7 ? names[sLobby] : "?");
+    }
     switch (sLobby) {
         case LOBBY_CHOICE:
             if (sAuto) { sLobby = sAuto == 1 ? LOBBY_CONNECT_HOST : LOBBY_CONNECT_JOIN; break; }
