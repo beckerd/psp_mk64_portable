@@ -36,6 +36,9 @@ PSP_HEAP_SIZE_KB(512);
 extern struct GfxWindowManagerAPI gfx_psp;
 extern void port_audio_out_init(void);
 extern struct GfxRenderingAPI gfx_opengl_api; // gfx_scegu.c keeps the sm64-port name
+#ifdef PORT_NET
+#include "../net/port_net.h"
+#endif
 
 /* Game-side entry points (main.c, TARGET_PSP variants). */
 extern void port_game_init(void);
@@ -260,10 +263,19 @@ void port_fs_mkdir(const char* path) {
 
 static u32 sFrame;
 static void run_one_iteration(void) {
+#ifdef PORT_NET
+    if (port_net_active() && !port_net_frame_begin()) {
+        sceKernelDelayThread(2000); // a peer's input has not arrived: hold this frame
+        return;
+    }
+#endif
     port_debug_frame_begin(sFrame); // no-ops unless a debug build (psp_debug.c)
     port_game_loop_one_iteration();
     port_debug_frame_end(sFrame);
     sFrame++;
+#ifdef PORT_NET
+    if (port_net_active()) port_net_frame_end();
+#endif
 }
 
 
@@ -282,6 +294,9 @@ int main(UNUSED int argc, char** argv) {
     gfx_init(&gfx_psp, &gfx_opengl_api, "MK64 Portable", false);
     port_debug_selftest(); // PORT_GFX_SELFTEST builds only
 
+#ifdef PORT_NET
+    port_net_boot(); // ad hoc session (L/R held at boot, or data/netrole.bin); waits for the peers
+#endif
     port_game_init();
     PORT_LOG("game init done\n");
 

@@ -14,6 +14,9 @@
 #include <macros.h>
 #include "port.h"
 #include "main.h"
+#ifdef PORT_NET
+#include "net/port_net.h"
+#endif
 #include "menus.h"
 #include "code_800029B0.h"
 #include "cpu_vehicles_camera_path.h"
@@ -47,6 +50,9 @@ static const ScriptStep sSteps[] = {
     TAP(240, START_BUTTON),  // title screen -> main menu
     // Main menu: 1P -> Mario GP -> 50cc -> OK (defaults; each A advances)
     TAP(400, A_BUTTON),  // leaves the title; the game select appears ~12 frames later
+#ifdef PORT_NET
+    TAP(440, R_JPAD),    // 2P GAME (a lockstep session: one pad per machine)
+#endif
     TAP(470, A_BUTTON),  // (shot450 shows its top level with the L OPTION / R DATA buttons)
     TAP(520, A_BUTTON),
     TAP(580, A_BUTTON),
@@ -137,6 +143,14 @@ void port_input_script(OSContPad* pad) {
             break;
         }
     }
+#ifdef PORT_NET
+    /* In a lockstep session this script runs on every machine; the menu
+     * navigation (player count, mode, course) is the host's alone -- the game
+     * counts a Right on two pads as two presses (2P GAME became 3P GAME). */
+    if (port_net_local_slot() != 0) {
+        pad->button &= ~(R_JPAD | L_JPAD);
+    }
+#endif
 
 #ifdef PORT_STRAIGHT_RACE
     /* Issue #10 neon signs: drop the kart onto the track a little before a

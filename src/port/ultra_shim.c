@@ -13,6 +13,9 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include "port.h"
+#ifdef PORT_NET
+#include "net/port_net.h"
+#endif
 
 #include <pspkernel.h>
 #include <psprtc.h>
@@ -232,12 +235,17 @@ extern void controller_psp_init(void);
 extern void controller_psp_read(OSContPad* pad);
 
 s32 osContInit(UNUSED OSMesgQueue* mq, u8* bitpattern, OSContStatus* status) {
+    int i, plugged = 1;
     controller_psp_init();
-    *bitpattern = 1; // one controller plugged in
-    status[0].type = CONT_TYPE_NORMAL;
-    status[0].status = 0;
-    status[0].errnum = 0;
-    status[1].errnum = status[2].errnum = status[3].errnum = CONT_NO_RESPONSE_ERROR;
+#ifdef PORT_NET
+    if (port_net_active()) plugged = port_net_players(); // one pad per machine in the session
+#endif
+    *bitpattern = (u8) ((1 << plugged) - 1);
+    for (i = 0; i < 4; i++) {
+        status[i].type = CONT_TYPE_NORMAL;
+        status[i].status = 0;
+        status[i].errnum = i < plugged ? 0 : CONT_NO_RESPONSE_ERROR;
+    }
     return 0;
 }
 
@@ -246,14 +254,26 @@ s32 osContStartReadData(OSMesgQueue* mq) {
     return 0;
 }
 
-void osContGetReadData(OSContPad* pad) {
-    controller_psp_read(&pad[0]);
+/* The local pad as the game reads it: the PSP controls, plus the scripted
+ * input of debug builds.  In a network session this feeds the local slot. */
+void port_local_pad(OSContPad* pad) {
+    controller_psp_read(pad);
 #ifdef PORT_INPUT_SCRIPT
     {
         extern void port_input_script(OSContPad* pad);
-        port_input_script(&pad[0]);
+        port_input_script(pad);
     }
 #endif
+}
+
+void osContGetReadData(OSContPad* pad) {
+#ifdef PORT_NET
+    if (port_net_active()) {
+        port_net_pads(pad); // this frame's inputs for every slot, ours included
+        return;
+    }
+#endif
+    port_local_pad(&pad[0]);
     pad[1].button = pad[2].button = pad[3].button = 0;
     pad[1].stick_x = pad[2].stick_x = pad[3].stick_x = 0;
     pad[1].stick_y = pad[2].stick_y = pad[3].stick_y = 0;
