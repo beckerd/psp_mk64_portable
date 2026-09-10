@@ -233,6 +233,13 @@ void update_menus(void) {
                     break;
                 case COURSE_SELECT_MENU_FROM_QUIT:
                 case COURSE_SELECT_MENU:
+#ifdef PORT_NET
+                    /* Ad hoc: the host (pad 1) picks the course.  Every machine
+                     * applies the same rule to the same lockstep pads. */
+                    if (port_net_active() && controllerIdx != PLAYER_ONE) {
+                        break;
+                    }
+#endif
                     course_select_menu_act(&gControllers[controllerIdx], controllerIdx);
                     break;
             }

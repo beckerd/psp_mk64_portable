@@ -47,11 +47,14 @@ CANCEL (Up/Down, Cross, Square cancels at any point).
   N MORE PLAYERS".  Joiners whose race matches are given slots; when the
   slots are full the host sends START and the game goes on.
 - JOIN loads the modules and listens for an advert that matches the race the
-  joiner set up ("SEARCHING"), asks that host for a slot ("JOINING") and waits
-  for START.
+  joiner set up ("SEARCHING..."), asks that host for a slot ("JOINING...")
+  and, once the host's advert lists its id among the filled slots, shows
+  "JOINED RACE" until START.  If the advert shows the race full without it,
+  it drops that host and searches again.
 - START carries the host's selections, RNG seed and menu timers; both
   machines then make the OK transition into the character select in lockstep
-  frame 0 (host = pad 1, joiners = pads 2-4).  Character select, course
+  frame 0 (host = pad 1, joiners = pads 2-4).  Everyone picks their own
+  character; the course select answers the host's pad only.  Character select, course
   select, the race, pause and results all run in lockstep from there.
 
 Scripted tests pick the modal choice from `data/netrole.bin`: 0x12/0x13/0x14
