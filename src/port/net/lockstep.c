@@ -323,6 +323,8 @@ extern s8 gGameModeMenuColumn[];
 extern s8 gGameModeSubMenuColumn[4][3];
 extern s32 gCycleFlashMenu;
 extern s32 gMenuTimingCounter;
+extern s32 gMatrixEffectCount;
+extern void func_80095AE0(void* m, f32 x, f32 y, f32 sx, f32 sy); /* translate + scale (menu_items.c) */
 
 static void criteria_now(void) {
     int n = gPlayerCount < 1 ? 1 : gPlayerCount > 4 ? 4 : gPlayerCount;
@@ -495,10 +497,41 @@ static const char* cc_name(int mode, int cc) {
 /* After the menu render (main.c): the modal over the frozen game select.
  * Heading 1.0, subheading 0.75, status 0.65, menu lines 0.9; everything
  * inside the box. */
-#define LB_X0 56
-#define LB_Y0 58
-#define LB_X1 264
-#define LB_Y1 198
+#define LB_X0 44
+#define LB_Y0 52
+#define LB_X1 276
+#define LB_Y1 236
+/* A translucent quad through the same ortho projection the menu font uses
+ * (draw_box goes through the 2D rectangle path, which the port stretches to
+ * the full width -- it and the text would not line up). */
+static Vtx sPanelQuads[2][4] __attribute__((aligned(16))); /* the display list reads them after this frame's draw code ran */
+static int sPanelQuadN;
+static void lobby_panel(int x0, int y0, int x1, int y1, int alpha) {
+    Vtx* sQuad = sPanelQuads[sPanelQuadN++ & 1];
+    Mtx* m;
+    int i;
+    for (i = 0; i < 4; i++) {
+        sQuad[i].v.ob[0] = (short) ((i == 0 || i == 3) ? x0 : x1);
+        sQuad[i].v.ob[1] = (short) ((i < 2) ? y0 : y1);
+        sQuad[i].v.ob[2] = 0;
+        sQuad[i].v.flag = 0;
+        sQuad[i].v.tc[0] = sQuad[i].v.tc[1] = 0;
+        sQuad[i].v.cn[0] = sQuad[i].v.cn[1] = sQuad[i].v.cn[2] = 0;
+        sQuad[i].v.cn[3] = (unsigned char) alpha;
+    }
+    m = &gGfxPool->mtxEffect[gMatrixEffectCount++];
+    func_80095AE0((void*) m, 0.0f, 0.0f, 1.0f, 1.0f); /* identity: the quad is in screen units already */
+    gSPMatrix(gDisplayListHead++, VIRTUAL_TO_PHYSICAL(m), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gDPPipeSync(gDisplayListHead++);
+    gSPClearGeometryMode(gDisplayListHead++, G_ZBUFFER | G_LIGHTING | G_CULL_BOTH | G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR);
+    gSPSetGeometryMode(gDisplayListHead++, G_SHADE | G_SHADING_SMOOTH);
+    gSPTexture(gDisplayListHead++, 0, 0, 0, G_TX_RENDERTILE, G_OFF);
+    gDPSetCombineMode(gDisplayListHead++, G_CC_SHADE, G_CC_SHADE);
+    gDPSetRenderMode(gDisplayListHead++, G_RM_XLU_SURF, G_RM_XLU_SURF2);
+    gSPVertex(gDisplayListHead++, VIRTUAL_TO_PHYSICAL(sQuad), 4, 0);
+    gSP2Triangles(gDisplayListHead++, 0, 1, 2, 0, 0, 2, 3, 0);
+    gDPPipeSync(gDisplayListHead++);
+}
 static void lobby_line(int y, const char* text, f32 scale, int colour) {
     set_text_color(colour);
     print_text1_center_mode_1((LB_X0 + LB_X1) / 2, y, (char*) text, 1, scale, scale);
@@ -513,38 +546,41 @@ void port_net_lobby_draw(void) {
         if (seen[sLobby]++ == 3 && !shot[sLobby]) { shot[sLobby] = 1; port_screenshot(8000 + sLobby); }
     }
 #endif
-    /* The fades use the same translucent box over the whole screen. */
-    gDisplayListHead = draw_box(gDisplayListHead, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0x90);
-    gDisplayListHead = draw_box(gDisplayListHead, LB_X0, LB_Y0, LB_X1, LB_Y1, 0, 0, 0, 0xE0);
-    lobby_line(LB_Y0 + 12, "AD HOC PLAY", 1.0f, TEXT_YELLOW);
+    gDisplayListHead = draw_box(gDisplayListHead, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0x90); /* dim the menu */
+    sPanelQuadN = 0;
+    lobby_panel(LB_X0, LB_Y0, LB_X1, LB_Y1, 0xF4);
+    /* The game select's OK? sprite goes through the 2D path (x stretched by
+     * 480/320, y by 272/240); in this quad's space that lands here. */
+    lobby_panel(258, 196, 308, 226, 0xFF);
+    lobby_line(LB_Y0 + 14, "AD HOC PLAY", 1.0f, TEXT_YELLOW);
     snprintf(line, sizeof(line), "%dP %s %s", sCritPlayers, mode_name(sCritMode), cc_name(sCritMode, sCritCc));
-    lobby_line(LB_Y0 + 32, line, 0.75f, TEXT_BLUE);
+    lobby_line(LB_Y0 + 36, line, 0.75f, TEXT_RED);
     switch (sLobby) {
         case LOBBY_CHOICE: {
             static const char* items[3] = { "HOST RACE", "JOIN RACE", "CANCEL" };
             for (s = 0; s < 3; s++) {
-                lobby_line(LB_Y0 + 62 + s * 20, items[s], 0.9f, s == sChoice ? TEXT_YELLOW : TEXT_BLUE);
+                lobby_line(LB_Y0 + 70 + s * 22, items[s], 0.9f, s == sChoice ? TEXT_GREEN : TEXT_BLUE);
             }
             break;
         }
         case LOBBY_CONNECT_HOST:
         case LOBBY_CONNECT_JOIN:
-            lobby_line(LB_Y0 + 76, "STARTING WLAN...", 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 84, "STARTING WLAN...", 0.65f, TEXT_YELLOW);
             break;
         case LOBBY_HOSTING:
             for (s = 1; s < sPlayers; s++) n += sKnown[s];
             snprintf(line, sizeof(line), "WAITING FOR %d PLAYER%s", sPlayers - 1 - n, sPlayers - 1 - n == 1 ? "" : "S");
-            lobby_line(LB_Y0 + 66, line, 0.65f, TEXT_YELLOW);
-            lobby_line(LB_Y0 + 108, "CANCEL", 0.9f, sCancelSel ? TEXT_YELLOW : TEXT_BLUE);
+            lobby_line(LB_Y0 + 74, line, 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 118, "CANCEL", 0.9f, sCancelSel ? TEXT_GREEN : TEXT_BLUE);
             break;
         case LOBBY_SEARCHING:
-            lobby_line(LB_Y0 + 66, sHaveHost ? "JOINING..." : "SEARCHING...", 0.65f, TEXT_YELLOW);
-            lobby_line(LB_Y0 + 108, "CANCEL", 0.9f, sCancelSel ? TEXT_YELLOW : TEXT_BLUE);
+            lobby_line(LB_Y0 + 74, sHaveHost ? "JOINING..." : "SEARCHING...", 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 118, "CANCEL", 0.9f, sCancelSel ? TEXT_GREEN : TEXT_BLUE);
             break;
         case LOBBY_ERROR:
-            lobby_line(LB_Y0 + 62, "WLAN FAILED", 0.9f, TEXT_RED);
-            lobby_line(LB_Y0 + 80, sErr, 0.55f, TEXT_BLUE);
-            lobby_line(LB_Y0 + 108, "BACK", 0.9f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 70, "WLAN FAILED", 0.9f, TEXT_RED);
+            lobby_line(LB_Y0 + 90, sErr, 0.55f, TEXT_BLUE);
+            lobby_line(LB_Y0 + 118, "BACK", 0.9f, TEXT_GREEN);
             break;
     }
 }
