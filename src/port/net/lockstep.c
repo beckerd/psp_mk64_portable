@@ -500,7 +500,7 @@ static const char* cc_name(int mode, int cc) {
  * Heading 1.0, subheading 0.75, status 0.65, menu lines 0.9; everything
  * inside the box. */
 #define LB_X0 44
-#define LB_Y0 70
+#define LB_Y0 50
 #define LB_X1 276
 #define LB_Y1 236
 /* A translucent quad through the same ortho projection the menu font uses
@@ -551,38 +551,35 @@ void port_net_lobby_draw(void) {
     gDisplayListHead = draw_box(gDisplayListHead, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0x90); /* dim the menu */
     sPanelQuadN = 0;
     lobby_panel(LB_X0, LB_Y0, LB_X1, LB_Y1, 0xF4);
-    /* The game select's OK? sprite goes through the 2D path (x stretched by
-     * 480/320, y by 272/240); in this quad's space that lands here. */
-    lobby_panel(258, 196, 308, 226, 0xFF);
-    lobby_line(LB_Y0 + 14, "AD HOC PLAY", 1.0f, TEXT_YELLOW);
+    lobby_line(LB_Y0 + 34, "AD HOC PLAY", 1.0f, TEXT_YELLOW);
     snprintf(line, sizeof(line), "%dP %s %s", sCritPlayers, mode_name(sCritMode), cc_name(sCritMode, sCritCc));
-    lobby_line(LB_Y0 + 36, line, 0.75f, TEXT_RED);
+    lobby_line(LB_Y0 + 56, line, 0.75f, TEXT_RED);
     switch (sLobby) {
         case LOBBY_CHOICE: {
             static const char* items[3] = { "HOST RACE", "JOIN RACE", "CANCEL" };
             for (s = 0; s < 3; s++) {
-                lobby_line(LB_Y0 + 70 + s * 22, items[s], 0.9f, s == sChoice ? TEXT_GREEN : TEXT_BLUE);
+                lobby_line(LB_Y0 + 90 + s * 22, items[s], 0.9f, s == sChoice ? TEXT_GREEN : TEXT_BLUE);
             }
             break;
         }
         case LOBBY_CONNECT_HOST:
         case LOBBY_CONNECT_JOIN:
-            lobby_line(LB_Y0 + 84, "STARTING WLAN...", 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 104, "STARTING WLAN...", 0.65f, TEXT_YELLOW);
             break;
         case LOBBY_HOSTING:
             for (s = 1; s < sPlayers; s++) n += sKnown[s];
             snprintf(line, sizeof(line), "WAITING FOR %d PLAYER%s", sPlayers - 1 - n, sPlayers - 1 - n == 1 ? "" : "S");
-            lobby_line(LB_Y0 + 74, line, 0.65f, TEXT_YELLOW);
-            lobby_line(LB_Y0 + 118, "CANCEL", 0.9f, sCancelSel ? TEXT_GREEN : TEXT_BLUE);
+            lobby_line(LB_Y0 + 94, line, 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 138, "CANCEL", 0.9f, sCancelSel ? TEXT_GREEN : TEXT_BLUE);
             break;
         case LOBBY_SEARCHING:
-            lobby_line(LB_Y0 + 74, sHaveHost ? "JOINING..." : "SEARCHING...", 0.65f, TEXT_YELLOW);
-            lobby_line(LB_Y0 + 118, "CANCEL", 0.9f, sCancelSel ? TEXT_GREEN : TEXT_BLUE);
+            lobby_line(LB_Y0 + 94, sHaveHost ? "JOINING..." : "SEARCHING...", 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 138, "CANCEL", 0.9f, sCancelSel ? TEXT_GREEN : TEXT_BLUE);
             break;
         case LOBBY_ERROR:
-            lobby_line(LB_Y0 + 70, "WLAN FAILED", 0.9f, TEXT_RED);
-            lobby_line(LB_Y0 + 90, sErr, 0.55f, TEXT_BLUE);
-            lobby_line(LB_Y0 + 118, "BACK", 0.9f, TEXT_GREEN);
+            lobby_line(LB_Y0 + 90, "WLAN FAILED", 0.9f, TEXT_RED);
+            lobby_line(LB_Y0 + 110, sErr, 0.55f, TEXT_BLUE);
+            lobby_line(LB_Y0 + 138, "BACK", 0.9f, TEXT_GREEN);
             break;
     }
 }
