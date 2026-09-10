@@ -385,12 +385,14 @@ static void send_advert(void) {
 }
 
 static void lobby_transport(int host) {
+    sCancelSel = 1; /* the waiting screens: CANCEL is the only line, selected by default */
     if (!net_transport_init(host ? NET_ROLE_HOST : NET_ROLE_CLIENT, "MK64")) {
         snprintf(sErr, sizeof(sErr), "%s", net_transport_status());
         PORT_LOG("net: transport init failed: %s\n", sErr);
         sLobby = LOBBY_ERROR;
         return;
     }
+    sCancelSel = 1;
     session_reset();
     if (host) {
         sRole = NET_ROLE_HOST; sSlot = 0; sPlayers = sCritPlayers;
@@ -498,7 +500,7 @@ static const char* cc_name(int mode, int cc) {
  * Heading 1.0, subheading 0.75, status 0.65, menu lines 0.9; everything
  * inside the box. */
 #define LB_X0 44
-#define LB_Y0 52
+#define LB_Y0 70
 #define LB_X1 276
 #define LB_Y1 236
 /* A translucent quad through the same ortho projection the menu font uses
