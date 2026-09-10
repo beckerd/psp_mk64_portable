@@ -994,11 +994,13 @@ void game_state_handler(void) {
             // Display black
             osViBlack(0);
 #ifdef PORT_NET
-            if (port_net_lobby_active()) {
-                port_net_lobby_update(); // the modal over the frozen game select (docs/adhoc.md)
+            if (port_net_lobby_active() || port_net_modal_active()) {
+                // the lobby / drop-out prompt over the frozen menu (docs/adhoc.md)
+                if (port_net_lobby_active()) port_net_lobby_update();
                 init_rcp();
                 func_80094A64(gGfxPool);
-                port_net_lobby_draw();
+                if (port_net_lobby_active()) port_net_lobby_draw();
+                else port_net_modal_draw();
                 break;
             }
 #endif

@@ -264,6 +264,7 @@ void port_fs_mkdir(const char* path) {
 static u32 sFrame;
 static void run_one_iteration(void) {
 #ifdef PORT_NET
+    port_net_modal_update(); /* the drop-out prompts read the local pad directly */
     if (port_net_active() && !port_net_frame_begin()) {
         sceKernelDelayThread(2000); // a peer's input has not arrived: hold this frame
         return;

@@ -1,4 +1,7 @@
 #include <ultra64.h>
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#endif
 #include <PR/ultratypes.h>
 #include <macros.h>
 #include <defines.h>
@@ -7759,6 +7762,12 @@ void render_menu_item_announce_ghost(MenuItem* arg0) {
 }
 
 void render_pause_menu(MenuItem* arg0) {
+#ifdef PORT_NET
+    if (port_net_modal_active()) {
+        port_net_modal_draw();
+        return;
+    }
+#endif
     if (gIsGamePaused != 0) {
         switch (gModeSelection) {
             case TIME_TRIALS:
@@ -11572,6 +11581,11 @@ void func_800ADF48(MenuItem* arg0) {
     UNUSED s32 stackPadding;
     struct Controller* controller;
 
+#ifdef PORT_NET
+    if (port_net_modal_active()) {
+        return; /* the ad hoc drop-out prompt owns the paused race */
+    }
+#endif
     if (gIsGamePaused != 0) {
         switch (arg0->state) {
             case 0:

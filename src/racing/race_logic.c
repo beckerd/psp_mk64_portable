@@ -1,4 +1,7 @@
 #include <ultra64.h>
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#endif
 #include <macros.h>
 #include <common_structs.h>
 #include <defines.h>
@@ -836,7 +839,11 @@ void func_8028F970(void) {
             }
         }
         if ((controller->buttonPressed & START_BUTTON) && (!(controller->button & R_TRIG)) &&
-            (!(controller->button & L_TRIG))) {
+            (!(controller->button & L_TRIG))
+#ifdef PORT_NET
+            && !port_net_modal_active() /* the ad hoc drop-out prompt is up: no pause menu under it */
+#endif
+        ) {
             func_8028DF00();
             gIsGamePaused = (controller - gControllerOne) + 1;
             controller->buttonPressed = 0;

@@ -32,17 +32,29 @@
 #include "menu_items.h"
 #include "audio/external.h"
 #include <sounds.h>
+#include "replays.h"
+#include "racing/race_logic.h"
+#include "code_800029B0.h"
 
 #define RING 128
 #define INPUT_DELAY 2
 #define REDUNDANCY 8
 #define CHECK_EVERY 30
 #define NET_MAGIC 0xA7
-#define DROP_AFTER_US (10u * 1000000u)
+#ifdef PORT_NET_ADHOC
+#define DROP_AFTER_US (5u * 1000000u)   /* the radio answers in milliseconds: a silent peer is gone */
+#define GIVEUP_AFTER_US (6u * 1000000u)
+#else
+#define DROP_AFTER_US (10u * 1000000u)  /* the file mailbox stalls for seconds on its own */
 #define GIVEUP_AFTER_US (15u * 1000000u)
+#endif
 enum { PKT_HELLO = 1, PKT_START = 2, PKT_INPUT = 3, PKT_ADVERT = 4 };
 
-typedef struct { u16 button; s8 sx, sy; } NetInput;
+/* flags travel in the host's inputs only: the frame they apply to is the
+ * frame every machine acts on them, so pauses and the end stay in step. */
+#define NETIN_PAUSE 1 /* the host's drop-out prompt is up: the game is paused */
+#define NETIN_END 2   /* the host chose EXIT: the session ends at this frame */
+typedef struct { u16 button; s8 sx, sy; u8 flags; } NetInput;
 /* Naturally aligned (both machines run the same binary); no packing: a packed
  * u32 member would be an unaligned store on MIPS. */
 typedef struct NetPktTag {
@@ -75,6 +87,18 @@ static int sStallSlot = -1;
 static u8 sHostId[NET_ID_LEN];
 static u8 sCritPlayers, sCritMode, sCritCc;
 static int sLobby, sHaveHost, sJoined; /* client: a matching host was found / it lists us in its advert */
+/* The drop-out prompts (docs/adhoc.md).  HOST_DROP: the host's CONTINUE /
+ * EXIT choice; RESUMING / LEAVING: chosen, waiting for the flag's frame;
+ * WAIT_HOST: a joiner while the host decides; HOST_GONE / DROPPED: a joiner
+ * with only MAIN MENU left. */
+enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED };
+static int sModal, sModalSel, sModalSlot;
+static u8 sHostFlags;      /* host: the flags it puts in its outgoing inputs */
+static int sEnded;         /* the session is over but the prompt is still up: local pad, everyone else neutral, full-screen view kept */
+static int sAppliedPause;  /* the host's PAUSE flag as applied on this machine */
+static u16 sModalPrevButtons;
+static void modal_open(int which);
+static void end_session_to_menu(void);
 static u32 sLastHelloUs;
 enum { LOBBY_NONE, LOBBY_CHOICE, LOBBY_CONNECT_HOST, LOBBY_CONNECT_JOIN, LOBBY_HOSTING, LOBBY_SEARCHING, LOBBY_ERROR };
 static int criteria_match(const struct NetPktTag* p);
@@ -207,6 +231,13 @@ static void send_inputs(void) {
 
 static void apply_drops(const NetPkt* p) {
     int s;
+    if (sRole == NET_ROLE_CLIENT && (p->dropped & (1 << sSlot)) && sModal != MODAL_DROPPED) {
+        /* The host gave up on us (a long radio gap) while we are still here:
+         * everyone else plays on with our kart parked.  Stop, say so. */
+        PORT_LOG("net: the host dropped us from frame %u\n", (unsigned) p->drop_frame[sSlot]);
+        modal_open(MODAL_DROPPED);
+        return;
+    }
     for (s = 1; s < NET_MAX_PLAYERS; s++) {
         if ((p->dropped & (1 << s)) && !(sDropped & (1 << s))) {
             sDropped |= 1 << s;
@@ -355,8 +386,9 @@ static int criteria_match(const NetPkt* p) {
 
 static void session_reset(void) {
     int i, s;
-    NetInput neutral = { 0, 0, 0 };
+    NetInput neutral = { 0, 0, 0, 0 };
     sRunning = 0; sFrame = 0; sDropped = 0; sStalls = 0; sLastStallLog = 0; sStallSlot = -1;
+    sModal = MODAL_NONE; sHostFlags = 0; sAppliedPause = 0; sEnded = 0;
     memset(sHave, 0xFF, sizeof(sHave));
     memset(sKnown, 0, sizeof(sKnown));
     memset(sIds, 0, sizeof(sIds));
@@ -654,6 +686,134 @@ void port_net_lobby_draw(void) {
     if (cursorY >= 0) lobby_cursor(cursorY, cursorText);
 }
 
+/* ---- the drop-out prompts ------------------------------------------------ */
+
+/* The race's own pause (what START does), when the race allows it; in the
+ * menus the overlay freezes them instead (main.c). */
+static int race_can_pause(void) { return gGamestate == RACING && gRaceState < RACE_HUMAN_FINISHED && !gIsInQuitToMenuTransition; }
+static void net_pause(int on) {
+    if (on && gIsGamePaused == 0 && race_can_pause()) {
+        func_8028DF00();
+        gIsGamePaused = 1;
+        func_800C9F90(1);
+        gPauseTriggered = 1;
+    } else if (!on && gIsGamePaused != 0 && gGamestate == RACING) {
+        gIsGamePaused = 0;
+        func_8028DF38();
+        func_800C9F90(0);
+    }
+}
+
+static void modal_open(int which) {
+    OSContPad pad;
+    port_local_pad(&pad);
+    sModalPrevButtons = pad.button; /* a button already down does not count */
+    sModal = which;
+    sModalSel = 0;
+    if (which == MODAL_HOST_DROP) {
+        sHostFlags |= NETIN_PAUSE; /* pauses everyone when that input's frame comes round */
+    } else if (which == MODAL_HOST_GONE || which == MODAL_DROPPED) {
+        sEnded = 1; /* no more lockstep; the view and the pads stay as they were until MAIN MENU */
+        net_pause(1);
+    }
+    PORT_LOG("net: prompt %d\n", which);
+}
+
+/* Leave the session and go to the main menu (the pause menu's QUIT path in
+ * the race; its own transition in the menus). */
+static void end_session_to_menu(void) {
+    sModal = MODAL_NONE;
+    sRunning = 0;
+    sRole = NET_ROLE_NONE;
+    net_transport_term();
+    if (gGamestate == RACING) {
+        gIsGamePaused = 0;
+        func_80290338();
+    } else {
+        gGamestateNext = MAIN_MENU_FROM_QUIT;
+        gGamestate = 255;
+        gIsInQuitToMenuTransition = 0;
+        gQuitToMenuTransitionCounter = 0;
+        gFadeModeSelection = FADE_MODE_MAIN;
+        gMenuSelection = MAIN_MENU;
+    }
+    PORT_LOG("net: session over, to the main menu\n");
+}
+
+int port_net_modal_active(void) { return sModal != MODAL_NONE; }
+
+void port_net_modal_update(void) {
+    OSContPad pad;
+    u16 pressed;
+    if (sModal == MODAL_NONE) return;
+    port_local_pad(&pad);
+    pressed = pad.button & ~sModalPrevButtons;
+    sModalPrevButtons = pad.button;
+    switch (sModal) {
+        case MODAL_HOST_DROP:
+            if (pressed & (U_JPAD | D_JPAD)) { sModalSel ^= 1; play_sound2(SOUND_MENU_CURSOR_MOVE); }
+            if (pressed & A_BUTTON) {
+                if (sModalSel == 0) { play_sound2(SOUND_MENU_OK_CLICKED); sHostFlags &= ~NETIN_PAUSE; sModal = MODAL_RESUMING; }
+                else { play_sound2(SOUND_MENU_GO_BACK); sHostFlags = NETIN_END; sModal = MODAL_LEAVING; }
+            }
+            break;
+        case MODAL_HOST_GONE:
+        case MODAL_DROPPED:
+            if (pressed & (A_BUTTON | START_BUTTON)) { play_sound2(SOUND_MENU_OK_CLICKED); end_session_to_menu(); }
+            break;
+        default:
+            break;
+    }
+}
+
+#define MD_X0 64
+#define MD_Y0 78
+#define MD_X1 256
+#define MD_Y1 176
+static void modal_line(int y, const char* text, f32 scale, int colour) {
+    set_text_color(colour);
+    print_text1_center_mode_1((MD_X0 + MD_X1) / 2, y, (char*) text, 1, scale, scale);
+}
+static void modal_item(int y, const char* text, int selected) {
+    set_text_color(selected ? TEXT_BLUE_GREEN_RED_CYCLE_2 : TEXT_BLUE);
+    print_text1_center_mode_1((MD_X0 + MD_X1) / 2, y, (char*) text, 0, 0.9f, 1.0f);
+    if (selected) {
+        Unk_D_800E70A0 at;
+        at.column = (s16) ((MD_X0 + MD_X1) / 2 - lobby_text_width(text, 0.9f) / 2 - 10);
+        at.row = (s16) (y - 9);
+        at.pad0 = at.pad1 = 0;
+        func_800A66A8(&sCursorItem, &at);
+    }
+}
+void port_net_modal_draw(void) {
+    char line[40];
+    if (sModal == MODAL_NONE || sModal == MODAL_RESUMING || sModal == MODAL_LEAVING) return;
+    gDisplayListHead = draw_box(gDisplayListHead, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0x70);
+    sPanelQuadN = 0;
+    lobby_panel(MD_X0, MD_Y0, MD_X1, MD_Y1, 0xF4);
+    snprintf(line, sizeof(line), "PLAYER %d LEFT THE RACE", sModalSlot + 1);
+    switch (sModal) {
+        case MODAL_HOST_DROP:
+            modal_line(MD_Y0 + 30, line, 0.7f, TEXT_RED);
+            modal_item(MD_Y0 + 62, "CONTINUE", sModalSel == 0);
+            modal_item(MD_Y0 + 84, "EXIT", sModalSel == 1);
+            break;
+        case MODAL_WAIT_HOST:
+            modal_line(MD_Y0 + 30, line, 0.7f, TEXT_RED);
+            modal_line(MD_Y0 + 66, "WAITING FOR HOST...", 0.65f, TEXT_PORT_GREY_PULSE);
+            break;
+        case MODAL_HOST_GONE:
+            modal_line(MD_Y0 + 30, "HOST EXITED THE GAME", 0.7f, TEXT_RED);
+            modal_item(MD_Y0 + 74, "MAIN MENU", 1);
+            break;
+        case MODAL_DROPPED:
+            modal_line(MD_Y0 + 24, "YOU WERE DROPPED", 0.7f, TEXT_RED);
+            modal_line(MD_Y0 + 42, "FROM THE RACE", 0.7f, TEXT_RED);
+            modal_item(MD_Y0 + 74, "MAIN MENU", 1);
+            break;
+    }
+}
+
 int port_net_boot(void) { return 1; } /* the session starts from the game select now */
 
 int port_net_active(void) { return sRole != NET_ROLE_NONE && sRunning; }
@@ -672,6 +832,15 @@ int port_net_frame_begin(void) {
     int s;
     static u32 sSampled = ~0u;
     static int sJustSampled;
+    if (sEnded) { /* the prompt over the frozen race: our pad only, no network */
+        if (sSampled != sFrame) {
+            sSampled = sFrame;
+            port_local_pad(&pad);
+            in.button = pad.button; in.sx = pad.stick_x; in.sy = pad.stick_y; in.flags = 0;
+            store_input(sSlot, sFrame, &in);
+        }
+        return 1;
+    }
     poll();
     if (sRole == NET_ROLE_HOST && sFrame < 90) send_start(); /* cover a lost START */
     /* Our input for frame F + delay: sampled once per frame (a stall retry
@@ -681,6 +850,7 @@ int port_net_frame_begin(void) {
         sJustSampled = 1;
         port_local_pad(&pad);
         in.button = pad.button; in.sx = pad.stick_x; in.sy = pad.stick_y;
+        in.flags = sRole == NET_ROLE_HOST ? sHostFlags : 0;
         store_input(sSlot, sFrame + INPUT_DELAY, &in);
         if ((sFrame % 60) == 0) PORT_LOG("net: frame %u (%u stalls)\n", (unsigned) sFrame, (unsigned) sStalls);
     }
@@ -705,25 +875,43 @@ int port_net_frame_begin(void) {
             sStalls++;
             if (sStalls - sLastStallLog >= 200) { sLastStallLog = sStalls; PORT_LOG("net: frame %u waiting for slot %d (%u stalls so far)\n", (unsigned) sFrame, s, (unsigned) sStalls); }
             if (sRole == NET_ROLE_HOST && now - sStallSinceUs >= DROP_AFTER_US) {
-                drop_slot(s, sFrame, "no input for 10 s"); /* from this frame on: neutral, on every machine */
+                drop_slot(s, sFrame, "no input"); /* from this frame on: neutral, on every machine */
+                sModalSlot = s;
+                if (sModal == MODAL_NONE || sModal == MODAL_RESUMING) modal_open(MODAL_HOST_DROP); /* pause everyone, ask */
                 continue;
             }
             if (sRole == NET_ROLE_CLIENT && now - sLastHostPktUs >= GIVEUP_AFTER_US) {
-                int o;
-                for (o = 0; o < sPlayers; o++) if (o != sSlot && !(sDropped & (1 << o))) drop_slot(o, sFrame, "lost the host");
-                continue;
+                PORT_LOG("net: lost the host at frame %u\n", (unsigned) sFrame);
+                modal_open(MODAL_HOST_GONE); /* the session is over: MAIN MENU is all that is left */
+                return 1;
             }
             return 0;
         }
     }
     sStallSlot = -1;
+    { /* the host's flags for this frame, applied on every machine at this same frame */
+        const NetInput* h = &sRing[0][sFrame & (RING - 1)];
+        int pause = (h->flags & NETIN_PAUSE) != 0;
+        if (h->flags & NETIN_END) {
+            PORT_LOG("net: the host ended the session at frame %u\n", (unsigned) sFrame);
+            if (sRole == NET_ROLE_HOST) { send_inputs(); send_inputs(); end_session_to_menu(); }
+            else modal_open(MODAL_HOST_GONE);
+            return 1;
+        }
+        if (pause != sAppliedPause) {
+            sAppliedPause = pause;
+            net_pause(pause);
+            if (sRole == NET_ROLE_CLIENT) sModal = pause ? MODAL_WAIT_HOST : MODAL_NONE;
+            else if (!pause && sModal == MODAL_RESUMING) sModal = MODAL_NONE;
+        }
+    }
     return 1;
 }
 
 void port_net_pads(OSContPad* pads) {
     int s;
     for (s = 0; s < NET_MAX_PLAYERS; s++) {
-        if (s < sPlayers && !is_dropped(s, sFrame)) {
+        if (s < sPlayers && !is_dropped(s, sFrame) && (!sEnded || s == sSlot)) {
             const NetInput* in = &sRing[s][sFrame & (RING - 1)];
             pads[s].button = in->button;
             pads[s].stick_x = in->sx;

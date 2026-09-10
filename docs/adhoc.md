@@ -117,3 +117,22 @@ Two or three game folders, `data/netrole.bin` = 0x12 or 0x13 in the host's,
 2 and 3 in the clients', no `testcourse.bin`.  Start the host instance first.  Both run the input script,
 which picks 2P GAME; the client's script becomes pad 2.  The mailbox files
 live in `ms0:/mk64net/` (the emulator's memory stick directory).
+
+## Drop-outs
+
+The host alone declares a drop: a slot whose input it has waited
+DROP_AFTER_US for (5 s on the PSP, 10 s on the file transport) is dropped
+from that frame and reads as a neutral pad on every machine.  The host then
+pauses everyone and asks: "PLAYER N LEFT THE RACE" -- CONTINUE / EXIT.  The
+pause and the exit travel as flags in the host's own inputs (NETIN_PAUSE,
+NETIN_END), so every machine applies them at the same lockstep frame.  In
+the race the pause is the game's own (what START does); in the menus the
+overlay freezes them.  Joiners show "WAITING FOR HOST..." meanwhile; EXIT
+ends the session everywhere and sends everyone to the main menu, joiners
+first seeing "HOST EXITED THE GAME" -- MAIN MENU.
+
+A joiner that hears nothing from the host for GIVEUP_AFTER_US (6 s / 15 s)
+ends its session and shows the same "HOST EXITED THE GAME" prompt; one that
+finds its own slot in the host's dropped mask (it was away too long but is
+still here) shows "YOU WERE DROPPED FROM THE RACE".  Both keep the
+full-screen view and the paused race under the prompt until MAIN MENU.

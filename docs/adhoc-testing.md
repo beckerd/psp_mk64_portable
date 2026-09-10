@@ -24,8 +24,12 @@ Things worth trying, in this order:
 - 2P MARIO GP 50cc, one full cup.
 - 2P VS, then 2P BATTLE.
 - 3P or 4P if there are enough PSPs.
-- Mid-race, one PSP presses HOME and quits: the others should carry on after
-  about ten seconds with that kart parked.
+- Mid-race, a joiner presses HOME and quits: after about five seconds the
+  host's game pauses with "PLAYER N LEFT THE RACE" and CONTINUE / EXIT;
+  the other joiners see "WAITING FOR HOST...".  CONTINUE resumes with that
+  kart parked; EXIT sends everyone to the main menu.
+- Mid-race, the HOST presses HOME and quits: after about six seconds each
+  joiner pauses with "HOST EXITED THE GAME" and a MAIN MENU button.
 
 ## What to send back
 

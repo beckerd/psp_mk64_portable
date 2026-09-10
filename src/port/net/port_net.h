@@ -37,6 +37,12 @@ void port_net_lobby_open(void);
 int port_net_lobby_active(void);
 void port_net_lobby_update(void);
 void port_net_lobby_draw(void);
+/* Drop-out prompts (host: CONTINUE / EXIT; joiner: WAITING FOR HOST, HOST
+ * EXITED THE GAME, YOU WERE DROPPED): update from the main loop every
+ * iteration, draw from the pause-menu render (race) / the menu overlay. */
+int port_net_modal_active(void);
+void port_net_modal_update(void);
+void port_net_modal_draw(void);
 int port_net_active(void);
 int port_net_players(void);
 int port_net_local_slot(void);
