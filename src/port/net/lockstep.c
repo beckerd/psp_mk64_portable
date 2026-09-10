@@ -225,6 +225,7 @@ int port_net_boot(void) {
     int role = pick_role(), i, s, iter = 0;
     NetInput neutral = { 0, 0, 0 };
     if (role == NET_ROLE_NONE) return 1;
+    PORT_LOG("net: role %d\n", role);
     sRole = role == NET_ROLE_HOST ? NET_ROLE_HOST : NET_ROLE_CLIENT;
     sPlayers = 2; /* v1: two machines; the host's START carries the count */
     memset(sHave, 0xFF, sizeof(sHave));

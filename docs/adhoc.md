@@ -47,10 +47,18 @@ Nothing held: single player, the network code is idle.
    lockstep, both still rendering the game's split screen.  Proves the
    transport, the stall logic and determinism.  Test: two PPSSPP instances
    with the file transport, checksums match for a whole race.
-2. **Memory probe on a PSP-1000**: a `-DPORT_NET -DPORT_NET_ADHOC` build logs
-   the free memory before/after loading the net modules and after connecting
-   (`net_adhoc.c`, `net: ...: free N KB` in `data/log.txt`).  Decides whether
-   the memory items from the review become prerequisites.
+2. **Memory probe on the PSP** (done 2026-09-10, David's PSP, hosting):
+
+   | step | free | largest block |
+   | --- | --- | --- |
+   | before the net modules | 1857 KB | 1621 KB |
+   | after NET_COMMON + NET_ADHOC | 1649 KB | 1413 KB |
+   | after sceNetInit (128 KB pool) + adhoc + adhocctl init | 1505 KB | 1285 KB |
+   | after adhocctl connect + PDP socket | 1505 KB | 1285 KB |
+
+   The network stack costs about 350 KB and leaves 1.25 MB, so memory is not a
+   blocker.  The transport connects a group on hardware; the PDP socket was
+   created (no peer was present).
 3. **Full-screen local view**: render only the local slot's camera, in the
    single-player layout (wide FOV, anchored HUD) while the simulation stays in
    2P mode.  The 2P code path ties screen mode to viewport layout in about a

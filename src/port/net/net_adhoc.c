@@ -42,24 +42,31 @@ int net_transport_init(UNUSED int role, const char* group) {
     int rc, state = 0, tries;
     struct productStruct product;
     log_mem("before net modules");
+    PORT_LOG("net: wlan switch\n");
     if (sceWlanGetSwitchState() != 1) { fail("WLAN switch is off", 0); return 0; }
+    PORT_LOG("net: load NET_COMMON\n");
     rc = sceUtilityLoadNetModule(PSP_NET_MODULE_COMMON);
     if (rc < 0) { fail("load NET_COMMON", rc); return 0; }
     sLoaded[0] = 1;
+    PORT_LOG("net: load NET_ADHOC\n");
     rc = sceUtilityLoadNetModule(PSP_NET_MODULE_ADHOC);
     if (rc < 0) { fail("load NET_ADHOC", rc); return 0; }
     sLoaded[1] = 1;
     log_mem("after net modules");
+    PORT_LOG("net: sceNetInit\n");
     rc = sceNetInit(0x20000, 0x20, 0x1000, 0x20, 0x1000); /* 128 KB pool */
     if (rc < 0) { fail("sceNetInit", rc); return 0; }
+    PORT_LOG("net: sceNetAdhocInit\n");
     rc = sceNetAdhocInit();
     if (rc < 0) { fail("sceNetAdhocInit", rc); return 0; }
     memset(&product, 0, sizeof(product));
     product.unknown = 0;
     memcpy(product.product, "MK64PORTA", 9);
+    PORT_LOG("net: sceNetAdhocctlInit\n");
     rc = sceNetAdhocctlInit(0x2000, 0x20, &product);
     if (rc < 0) { fail("sceNetAdhocctlInit", rc); return 0; }
     log_mem("after net init");
+    PORT_LOG("net: sceNetAdhocctlConnect\n");
     rc = sceNetAdhocctlConnect(group != NULL ? group : ADHOC_GROUP);
     if (rc < 0) { fail("sceNetAdhocctlConnect", rc); return 0; }
     for (tries = 0; tries < 300; tries++) { /* ~15 s */
@@ -69,6 +76,7 @@ int net_transport_init(UNUSED int role, const char* group) {
     }
     if (state != 1) { fail("adhocctl connect timeout", state); return 0; }
     sceWlanGetEtherAddr(sMac);
+    PORT_LOG("net: connected, sceNetAdhocPdpCreate\n");
     sPdp = sceNetAdhocPdpCreate(sMac, ADHOC_PORT, ADHOC_BUFSIZE, 0);
     if (sPdp < 0) { fail("sceNetAdhocPdpCreate", sPdp); return 0; }
     log_mem("after adhoc connect");

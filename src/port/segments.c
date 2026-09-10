@@ -154,8 +154,6 @@ void* port_seg_to_ptr(uintptr_t addr) {
 /* Logging                                                                    */
 /* ------------------------------------------------------------------------- */
 
-static FILE* sLogFile;
-
 void port_log(const char* fmt, ...) {
     char buf[256];
     va_list ap;
@@ -163,11 +161,16 @@ void port_log(const char* fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     fputs(buf, stdout);
-    if (sLogFile == NULL) {
-        sLogFile = fopen(port_save_path("log.txt"), "w");
-    }
-    if (sLogFile != NULL) {
-        fputs(buf, sLogFile);
-        fflush(sLogFile);
+    /* Open, append, close per line: the PSP's FAT driver only updates the
+     * directory entry (the visible file size) on close, so a HOME exit or a
+     * crash used to leave log.txt truncated at the last close. */
+    {
+        static int sTruncated;
+        FILE* f = fopen(port_save_path("log.txt"), sTruncated ? "a" : "w");
+        sTruncated = 1;
+        if (f != NULL) {
+            fputs(buf, f);
+            fclose(f);
+        }
     }
 }
