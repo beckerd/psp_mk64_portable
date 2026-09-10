@@ -30,6 +30,8 @@
 #include "menus.h"
 #include "buffers.h"
 #include "menu_items.h"
+#include "audio/external.h"
+#include <sounds.h>
 
 #define RING 128
 #define INPUT_DELAY 2
@@ -72,7 +74,7 @@ static u32 sStallSinceUs, sLastHostPktUs;    /* wall clock */
 static int sStallSlot = -1;
 static u8 sHostId[NET_ID_LEN];
 static u8 sCritPlayers, sCritMode, sCritCc;
-static int sLobby, sHaveHost;
+static int sLobby, sHaveHost, sJoined; /* client: a matching host was found / it lists us in its advert */
 static u32 sLastHelloUs;
 enum { LOBBY_NONE, LOBBY_CHOICE, LOBBY_CONNECT_HOST, LOBBY_CONNECT_JOIN, LOBBY_HOSTING, LOBBY_SEARCHING, LOBBY_ERROR };
 static int criteria_match(const struct NetPktTag* p);
@@ -229,6 +231,20 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
             PORT_LOG("net: found a matching race at %02X%02X%02X%02X%02X%02X\n", from[0], from[1], from[2], from[3], from[4], from[5]);
             send_hello();
             sLastHelloUs = now_us();
+        } else if (memcmp(sHostId, from, NET_ID_LEN) == 0) {
+            /* The host's advert lists its filled slots: are we in, or is it full without us? */
+            static const u8 zero[NET_ID_LEN];
+            int s, in = 0, filled = 1;
+            for (s = 1; s < p->players && s < NET_MAX_PLAYERS; s++) {
+                if (memcmp(p->ids[s], net_transport_local_id(), NET_ID_LEN) == 0) in = 1;
+                if (memcmp(p->ids[s], zero, NET_ID_LEN) != 0) filled++;
+            }
+            if (in && !sJoined) { sJoined = 1; PORT_LOG("net: joined the race\n"); }
+            if (!in && filled >= p->players) { /* full without us: look for another host */
+                sHaveHost = 0; sJoined = 0;
+                memset(sIds[0], 0, NET_ID_LEN);
+                PORT_LOG("net: that race filled up without us; searching again\n");
+            }
         }
         return;
     }
@@ -380,7 +396,7 @@ static void send_advert(void) {
     memset(&p, 0, sizeof(p));
     p.type = PKT_ADVERT;
     p.players = sCritPlayers; p.mode = sCritMode; p.cc = sCritCc;
-    memcpy(p.ids[0], net_transport_local_id(), NET_ID_LEN);
+    memcpy(p.ids, sIds, sizeof(sIds)); /* [0] is us; the filled slots let a joiner see it is in */
     send_pkt(&p);
 }
 
@@ -400,7 +416,7 @@ static void lobby_transport(int host) {
         sKnown[0] = 1;
         sLobby = LOBBY_HOSTING;
     } else {
-        sRole = NET_ROLE_CLIENT; sHaveHost = 0;
+        sRole = NET_ROLE_CLIENT; sHaveHost = 0; sJoined = 0;
         sLobby = LOBBY_SEARCHING;
     }
     sLastAdvertUs = sLastHelloUs = 0;
@@ -441,11 +457,14 @@ void port_net_lobby_update(void) {
     switch (sLobby) {
         case LOBBY_CHOICE:
             if (sAuto) { sLobby = sAuto == 1 ? LOBBY_CONNECT_HOST : LOBBY_CONNECT_JOIN; break; }
-            if (pressed & (U_JPAD | D_JPAD)) sChoice = (pressed & U_JPAD) ? (sChoice + 2) % 3 : (sChoice + 1) % 3;
-            if (pressed & B_BUTTON) { lobby_cancel(); break; }
+            if (pressed & (U_JPAD | D_JPAD)) {
+                sChoice = (pressed & U_JPAD) ? (sChoice + 2) % 3 : (sChoice + 1) % 3;
+                play_sound2(SOUND_MENU_CURSOR_MOVE);
+            }
+            if (pressed & B_BUTTON) { play_sound2(SOUND_MENU_GO_BACK); lobby_cancel(); break; }
             if (pressed & A_BUTTON) {
-                if (sChoice == 2) lobby_cancel();
-                else sLobby = sChoice == 0 ? LOBBY_CONNECT_HOST : LOBBY_CONNECT_JOIN; /* one frame of "starting" text first */
+                if (sChoice == 2) { play_sound2(SOUND_MENU_GO_BACK); lobby_cancel(); }
+                else { play_sound2(SOUND_MENU_OK_CLICKED); sLobby = sChoice == 0 ? LOBBY_CONNECT_HOST : LOBBY_CONNECT_JOIN; } /* one frame of "starting" text first */
             }
             break;
         case LOBBY_CONNECT_HOST:
@@ -456,8 +475,12 @@ void port_net_lobby_update(void) {
             break;
         case LOBBY_HOSTING: {
             int s, n = 0;
-            if (pressed & (U_JPAD | D_JPAD)) sCancelSel = (pressed & D_JPAD) ? 1 : 0;
-            if ((pressed & B_BUTTON) || ((pressed & A_BUTTON) && sCancelSel)) { lobby_cancel(); break; }
+            if (pressed & (U_JPAD | D_JPAD)) {
+                int sel = (pressed & D_JPAD) ? 1 : 0;
+                if (sel != sCancelSel) play_sound2(SOUND_MENU_CURSOR_MOVE);
+                sCancelSel = sel;
+            }
+            if ((pressed & B_BUTTON) || ((pressed & A_BUTTON) && sCancelSel)) { play_sound2(SOUND_MENU_GO_BACK); lobby_cancel(); break; }
             poll();
             if (now - sLastAdvertUs >= 500000) { send_advert(); sLastAdvertUs = now; }
             for (s = 1; s < sPlayers; s++) n += sKnown[s];
@@ -474,13 +497,17 @@ void port_net_lobby_update(void) {
             break;
         }
         case LOBBY_SEARCHING:
-            if (pressed & (U_JPAD | D_JPAD)) sCancelSel = (pressed & D_JPAD) ? 1 : 0;
-            if ((pressed & B_BUTTON) || ((pressed & A_BUTTON) && sCancelSel)) { lobby_cancel(); break; }
+            if (pressed & (U_JPAD | D_JPAD)) {
+                int sel = (pressed & D_JPAD) ? 1 : 0;
+                if (sel != sCancelSel) play_sound2(SOUND_MENU_CURSOR_MOVE);
+                sCancelSel = sel;
+            }
+            if ((pressed & B_BUTTON) || ((pressed & A_BUTTON) && sCancelSel)) { play_sound2(SOUND_MENU_GO_BACK); lobby_cancel(); break; }
             poll();
             if (sHaveHost && now - sLastHelloUs >= 500000) { send_hello(); sLastHelloUs = now; }
             break;
         case LOBBY_ERROR:
-            if (pressed & (A_BUTTON | B_BUTTON)) lobby_cancel();
+            if (pressed & (A_BUTTON | B_BUTTON)) { play_sound2(SOUND_MENU_GO_BACK); lobby_cancel(); }
             break;
         default:
             break;
@@ -499,10 +526,10 @@ static const char* cc_name(int mode, int cc) {
 /* After the menu render (main.c): the modal over the frozen game select.
  * Heading 1.0, subheading 0.75, status 0.65, menu lines 0.9; everything
  * inside the box. */
-#define LB_X0 44
+#define LB_X0 49
 #define LB_Y0 50
-#define LB_X1 276
-#define LB_Y1 236
+#define LB_X1 271
+#define LB_Y1 226
 /* A translucent quad through the same ortho projection the menu font uses
  * (draw_box goes through the 2D rectangle path, which the port stretches to
  * the full width -- it and the text would not line up). */
@@ -538,9 +565,39 @@ static void lobby_line(int y, const char* text, f32 scale, int colour) {
     set_text_color(colour);
     print_text1_center_mode_1((LB_X0 + LB_X1) / 2, y, (char*) text, 1, scale, scale);
 }
+/* Menu lines are a left-aligned column like the OPTION screen: the selected
+ * one cycles colour and gets the spinning diamond (func_800A66A8, the same
+ * cursor the OPTION screen draws; it wants a MenuItem for its spin rate). */
+#define LB_CX ((LB_X0 + LB_X1) / 2)
+static MenuItem sCursorItem;
+/* The width print_text1 would centre with (glyph widths at the item scale). */
+static int lobby_text_width(const char* text, f32 scaleX) {
+    char* p = (char*) text;
+    int w = 0;
+    while (*p != 0) {
+        s32 g = char_to_glyph_index(p);
+        if (g >= 0) w += (int) (gGlyphDisplayWidth[g] * scaleX);
+        else if (g == -1) w += (int) (7 * scaleX);
+        else break;
+        p += g >= 0x30 ? 2 : 1;
+    }
+    return w;
+}
+static void lobby_item(int y, const char* text, int selected) {
+    set_text_color(selected ? TEXT_BLUE_GREEN_RED_CYCLE_2 : TEXT_BLUE);
+    print_text1_center_mode_1(LB_CX, y, (char*) text, 0, 0.9f, 1.0f);
+}
+static void lobby_cursor(int y, const char* text) {
+    Unk_D_800E70A0 at;
+    at.column = (s16) (LB_CX - lobby_text_width(text, 0.9f) / 2 - 10); /* left of the first glyph (the model is centred on its origin) */
+    at.row = (s16) (y - 9);                                              /* on the text's middle (the row is the baseline) */
+    at.pad0 = at.pad1 = 0;
+    func_800A66A8(&sCursorItem, &at);
+}
 void port_net_lobby_draw(void) {
     char line[48];
-    int s, n = 0;
+    int s, n = 0, cursorY = -1; /* the diamond goes on the selected line, drawn last */
+    const char* cursorText = "";
     if (sLobby == LOBBY_NONE) return;
 #ifdef PORT_INPUT_SCRIPT
     { /* debug: one screenshot per lobby state (a frame after it first draws) */
@@ -558,30 +615,37 @@ void port_net_lobby_draw(void) {
         case LOBBY_CHOICE: {
             static const char* items[3] = { "HOST RACE", "JOIN RACE", "CANCEL" };
             for (s = 0; s < 3; s++) {
-                lobby_line(LB_Y0 + 90 + s * 22, items[s], 0.9f, s == sChoice ? TEXT_GREEN : TEXT_BLUE);
+                lobby_item(LB_Y0 + 90 + s * 22, items[s], s == sChoice);
             }
+            cursorY = LB_Y0 + 90 + sChoice * 22;
+            cursorText = items[sChoice];
             break;
         }
         case LOBBY_CONNECT_HOST:
         case LOBBY_CONNECT_JOIN:
-            lobby_line(LB_Y0 + 104, "STARTING WLAN...", 0.65f, TEXT_YELLOW);
+            lobby_line(LB_Y0 + 104, "STARTING WLAN...", 0.65f, TEXT_PORT_GREY_PULSE);
             break;
         case LOBBY_HOSTING:
             for (s = 1; s < sPlayers; s++) n += sKnown[s];
             snprintf(line, sizeof(line), "WAITING FOR %d PLAYER%s", sPlayers - 1 - n, sPlayers - 1 - n == 1 ? "" : "S");
-            lobby_line(LB_Y0 + 94, line, 0.65f, TEXT_YELLOW);
-            lobby_line(LB_Y0 + 138, "CANCEL", 0.9f, sCancelSel ? TEXT_GREEN : TEXT_BLUE);
+            lobby_line(LB_Y0 + 94, line, 0.65f, TEXT_PORT_GREY_PULSE);
+            lobby_item(LB_Y0 + 138, "CANCEL", sCancelSel);
+            if (sCancelSel) { cursorY = LB_Y0 + 138; cursorText = "CANCEL"; }
             break;
         case LOBBY_SEARCHING:
-            lobby_line(LB_Y0 + 94, sHaveHost ? "JOINING..." : "SEARCHING...", 0.65f, TEXT_YELLOW);
-            lobby_line(LB_Y0 + 138, "CANCEL", 0.9f, sCancelSel ? TEXT_GREEN : TEXT_BLUE);
+            lobby_line(LB_Y0 + 94, sJoined ? "JOINED RACE" : sHaveHost ? "JOINING..." : "SEARCHING...", 0.65f, TEXT_PORT_GREY_PULSE);
+            lobby_item(LB_Y0 + 138, "CANCEL", sCancelSel);
+            if (sCancelSel) { cursorY = LB_Y0 + 138; cursorText = "CANCEL"; }
             break;
         case LOBBY_ERROR:
             lobby_line(LB_Y0 + 90, "WLAN FAILED", 0.9f, TEXT_RED);
             lobby_line(LB_Y0 + 110, sErr, 0.55f, TEXT_BLUE);
-            lobby_line(LB_Y0 + 138, "BACK", 0.9f, TEXT_GREEN);
+            lobby_item(LB_Y0 + 138, "BACK", 1);
+            cursorY = LB_Y0 + 138;
+            cursorText = "BACK";
             break;
     }
+    if (cursorY >= 0) lobby_cursor(cursorY, cursorText);
 }
 
 int port_net_boot(void) { return 1; } /* the session starts from the game select now */

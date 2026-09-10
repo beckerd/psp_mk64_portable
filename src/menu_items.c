@@ -2695,6 +2695,29 @@ Gfx* func_800959F8(Gfx* displayListHead, Vtx* arg1) {
         index = ((gTextColor * 2) + ((s32) gGlobalTimer % 2)) - 4;
     }
 #ifdef AVOID_UB
+#ifndef TARGET_N64
+    if (gTextColor == TEXT_PORT_GREY_PULSE) {
+        /* Port: light grey, breathing (the ad hoc lobby's status lines).
+         * The glyph's own vertices with the colours rescaled; double-buffered
+         * because the GE reads them after this frame's draw code ran. */
+        static Vtx sGrey[2][4] __attribute__((aligned(16)));
+        Vtx* g = sGrey[gGlobalTimer & 1];
+        const Vtx* src = (const Vtx*) segmented_to_virtual_dupe_2(arg1);
+        s32 p = (s32) (gGlobalTimer % 60), i;
+        s32 f = 96 + ((p < 30 ? p : 60 - p) * 160) / 30; /* 96..256 over two seconds */
+        for (i = 0; i < 4; i++) {
+            g[i] = src[i < 2 ? i : i + 2 - 2]; /* [0..1] top edge, [2..3] the BLUE set's bottom edge */
+        }
+        for (i = 0; i < 4; i++) {
+            s32 base = i < 2 ? 0xE8 : 0xA8;
+            g[i].v.cn[0] = g[i].v.cn[1] = g[i].v.cn[2] = (u8) ((base * f) >> 8);
+            g[i].v.cn[3] = (u8) ((0xFF * f) >> 8);
+        }
+        gSPVertex(displayListHead++, g, 4, 0);
+        gSPDisplayList(displayListHead++, common_rectangle_display);
+        return displayListHead;
+    }
+#endif
     gSPVertex(displayListHead++, arg1, 2, 0);
     gSPVertex(displayListHead++, &arg1[(index + 1) * 2], 2, 2);
     gSPDisplayList(displayListHead++, common_rectangle_display);

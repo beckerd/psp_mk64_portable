@@ -251,7 +251,8 @@ enum COLOR_ID {
     TEXT_RED,
     TEXT_YELLOW,
     TEXT_BLUE_GREEN_RED_CYCLE_1,
-    TEXT_BLUE_GREEN_RED_CYCLE_2
+    TEXT_BLUE_GREEN_RED_CYCLE_2,
+    TEXT_PORT_GREY_PULSE = 8 /* port only: light grey, breathing (ad hoc lobby status) */
 };
 
 /**
