@@ -38,8 +38,10 @@ define.
 ## Role selection (v1)
 
 Hold L while the game starts to host, R to join; or put a byte in
-`data/netrole.bin` (1 host, 2 join) -- that is how the scripted tests do it.
-Nothing held: single player, the network code is idle.
+`data/netrole.bin` (1 host, 2..4 join, 0x12/0x13/0x14 host that starts by
+itself with 2/3/4 players -- that is how the scripted tests do it).  Nothing
+held: single player, the network code is idle.  The host's console shows the
+joiners; Cross starts the session.
 
 ## Milestones
 
@@ -73,16 +75,28 @@ Nothing held: single player, the network code is idle.
    portraits into its own layout every frame), the mini-map at 1P
    coordinates for slot 0, the kart shadows for slots 2-3 (func_80021B0C /
    func_80021C78 only cover two screens), the ceremony/results camera.
-4. **Two real PSPs**: ad hoc transport on hardware, latency and loss tuning.
-5. **Lobby**: host/join screen, player count 2-4, drop-out handling (a peer
-   that leaves becomes a parked kart or the race ends).
-6. **3-4 players**: the game already simulates four; the lobby and the
-   relay/latency budget are the work.
+4. **Lobby, 3-4 players, drop-outs** (done 2026-09-10): the host waits on the
+   boot console for 1-3 joiners and starts with Cross (or by itself once
+   `netrole.bin` = 0x10|n players are in, for scripted tests); START carries
+   the player count and the game's player-count menu is pinned to it.  The
+   host relays every slot's inputs it knows (star on top of the broadcast),
+   so client-to-client delivery is never required.  A slot the host has
+   waited 10 s for is declared dropped from that frame on and reads as an
+   idle pad on every machine from that same frame (the survivors stay in
+   step); a client that hears nothing from the host for 15 s drops everyone
+   and plays on alone.  Verified with three PPSSPP instances: a 3-player VS
+   race, each machine full screen on its own kart, zero desyncs; killing one
+   client mid-session dropped it at the same frame on both survivors, which
+   ran on with identical state.
+   Left for polish: the 3P/4P HUD (map position per slot, the timer), a
+   proper lobby screen instead of the boot console, a "connection lost"
+   message on the dropped machine.
+5. **Two real PSPs**: ad hoc transport on hardware, latency and loss tuning.
 
 ## Testing in PPSSPP
 
 Build: `gmake -f Makefile.psp -j8 EXTRA_CFLAGS="-DPORT_INPUT_SCRIPT -DPORT_GFX_DEBUG -DPORT_COURSE_TEST -DPORT_NET -DPORT_NET_FILE"`.
-Two game folders, `data/netrole.bin` = 1 in one and 2 in the other, no
-`testcourse.bin`.  Start the host instance first.  Both run the input script,
+Two or three game folders, `data/netrole.bin` = 0x12 or 0x13 in the host's,
+2 and 3 in the clients', no `testcourse.bin`.  Start the host instance first.  Both run the input script,
 which picks 2P GAME; the client's script becomes pad 2.  The mailbox files
 live in `ms0:/mk64net/` (the emulator's memory stick directory).

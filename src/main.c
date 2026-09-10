@@ -904,6 +904,11 @@ void race_logic_loop(void) {
                 select_framebuffer();
             }
             D_8015F788 = 0;
+#ifdef PORT_NET
+            if (port_net_active()) {
+                port_render_local_player(); // ad hoc: this machine's player, full screen
+            } else
+#endif
             if (gPlayerWinningIndex == 0) {
                 render_player_two_3p_4p_screen();
                 render_player_three_3p_4p_screen();

@@ -1639,10 +1639,11 @@ void port_render_local_player(void) {
         default: render_players_on_screen_four(); break;
     }
     func_8029122C(&sView, slot);
-    if (slot == 0) {
-        func_80021B0C();
-    } else if (slot == 1) {
-        func_80021C78();
+    switch (slot) { /* the kart shadows as seen from that screen */
+        case 0: func_80021B0C(); break;
+        case 1: func_80021C78(); break;
+        case 2: func_80021D40(); break;
+        default: func_80021DA8(); break;
     }
     render_item_boxes(&sView);
     render_player_snow_effect(mode);

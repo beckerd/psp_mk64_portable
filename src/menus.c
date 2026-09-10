@@ -1,4 +1,7 @@
 #include <ultra64.h>
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#endif
 #include <macros.h>
 #include <defines.h>
 #include <common_structs.h>
@@ -1284,6 +1287,12 @@ void main_menu_act(struct Controller* controller, u16 controllerIdx) {
             case MAIN_MENU_NONE:
                 break;
             case MAIN_MENU_PLAYER_SELECT:
+#ifdef PORT_NET
+                if (port_net_active()) {
+                    gPlayerCount = port_net_players(); // one pad per machine: the session decides
+                    btnAndStick &= ~(R_JPAD | L_JPAD);
+                }
+#endif
                 if ((btnAndStick & R_JPAD) && (gPlayerCount < 4)) {
                     gPlayerCount += 1;
                     reset_cycle_flash_menu();
