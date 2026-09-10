@@ -1,6 +1,9 @@
 #include <ultra64.h>
 #ifndef TARGET_N64
 #include "port/port.h"
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#endif
 #endif
 #include <macros.h>
 #include <mk64.h>
@@ -232,6 +235,11 @@ void setup_race(void) {
     func_8003D080();
     PORT_LOG(" func_8003D080 done\n");
     init_hud();
+#ifdef PORT_NET
+    if (port_net_active()) {
+        port_net_hud_layout(); // the local player's HUD at full-screen positions
+    }
+#endif
     PORT_LOG(" init_hud done\n");
     gRaceState = RACE_NONE;
     gNumSpawnedShells = 0;

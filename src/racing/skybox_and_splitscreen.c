@@ -19,6 +19,9 @@
 #include "main.h"
 #include "menus.h"
 #include "port/port.h"
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#endif
 
 Vp D_802B8880[] = {
     { { { 640, 480, 511, 0 }, { 640, 480, 511, 0 } } },
@@ -283,6 +286,11 @@ void func_802A4300(void) {
     if (gActiveScreenMode == SCREEN_MODE_1P) {
         return;
     }
+#ifdef PORT_NET
+    if (port_net_active()) {
+        return; // ad hoc: one player per screen, no split-screen divider
+    }
+#endif
     if (D_800DC5B0 != 0) {
         return;
     }
@@ -1534,3 +1542,136 @@ void func_802A7940(void) {
                      (u16*) PHYSICAL_TO_VIRTUAL(gPhysicalFramebuffers[temp_v0]),
                      (u16*) PHYSICAL_TO_VIRTUAL(gSegmentTable[5] + 0x14800));
 }
+
+#ifdef PORT_NET
+/*
+ * Ad hoc session: the simulation runs in the game's 2P/3P/4P mode but this
+ * machine shows only its own player, full screen, in the single-player layout
+ * (wide field of view, the 1P geometry mode).  This is render_player_one_1p_screen
+ * plus func_802A53A4 with every player-one resource indexed by the local slot,
+ * drawing through a shadow of the player's screen struct whose viewport is the
+ * whole screen (the real one describes a split-screen quarter and is left to the
+ * game).  The HUD uses the game's split-screen drawers for that player, at the
+ * coordinates port_net_hud_layout() installs.  See docs/adhoc.md, milestone 3.
+ */
+
+static s16 sNetPathCounter; /* render_course_segments keeps its section in the struct */
+
+static u32 net_render_mode(s32 slot) {
+    switch (gActiveScreenMode) {
+        case SCREEN_MODE_2P_SPLITSCREEN_VERTICAL:
+            return RENDER_SCREEN_MODE_2P_VERTICAL_PLAYER_ONE + slot;
+        case SCREEN_MODE_3P_4P_SPLITSCREEN:
+            return RENDER_SCREEN_MODE_3P_4P_PLAYER_ONE + slot;
+        default:
+            return RENDER_SCREEN_MODE_2P_HORIZONTAL_PLAYER_ONE + slot;
+    }
+}
+
+void port_render_local_player(void) {
+    static struct UnkStruct_800DC5EC sView;
+    s32 slot = port_net_local_slot();
+    struct UnkStruct_800DC5EC* real = slot == 0 ? D_800DC5EC : slot == 1 ? D_800DC5F0 : slot == 2 ? D_800DC5F4 : D_800DC5F8;
+    Camera* camera = &cameras[slot];
+    Vtx* sky = slot == 0 ? (Vtx*) sSkyboxP1 : slot == 1 ? (Vtx*) sSkyboxP2 : (Vtx*) sSkyboxP3;
+    u32 mode = net_render_mode(slot);
+    u16 perspNorm;
+    Mat4 matrix;
+
+    sView = *real;
+    sView.screenWidth = SCREEN_WIDTH;
+    sView.screenHeight = SCREEN_HEIGHT;
+    sView.screenStartX = SCREEN_WIDTH / 2;
+    sView.screenStartY = SCREEN_HEIGHT / 2;
+    sView.pathCounter = sNetPathCounter;
+
+    /* func_802A53A4: sky */
+    move_segment_table_to_dmem();
+    init_rdp();
+    func_802A3730(&sView);
+    gSPClearGeometryMode(gDisplayListHead++, 0xFFFFFFFF);
+    gSPSetGeometryMode(gDisplayListHead++, G_SHADE | G_SHADING_SMOOTH | G_CLIPPING);
+    init_z_buffer();
+    select_framebuffer();
+    if (D_800DC5B4 != 0) {
+        render_skybox(sky, &sView, SCREEN_WIDTH, SCREEN_HEIGHT, &gCameraZoom[slot]);
+        if (gGamestate != CREDITS_SEQUENCE) {
+            func_80057FC4(mode);
+        }
+        func_802A487C(sky, &sView, SCREEN_WIDTH, SCREEN_HEIGHT, &gCameraZoom[slot]);
+        func_80093A30(mode);
+    }
+
+    /* render_player_one_1p_screen: the world from this player's camera */
+    init_rdp();
+    func_802A3730(&sView);
+    gSPSetGeometryMode(gDisplayListHead++, G_ZBUFFER | G_SHADE | G_CULL_BACK | G_LIGHTING | G_SHADING_SMOOTH);
+    gDPSetRenderMode(gDisplayListHead++, G_RM_AA_ZB_OPA_SURF, G_RM_AA_ZB_OPA_SURF2);
+    guPerspective(&gGfxPool->mtxPersp[slot], &perspNorm, gCameraZoom[slot], 480.0f / 272.0f, gCourseNearPersp,
+                  gCourseFarPersp, 1.0f);
+    gSPPerspNormalize(gDisplayListHead++, perspNorm);
+    gSPMatrix(gDisplayListHead++, VIRTUAL_TO_PHYSICAL(&gGfxPool->mtxPersp[slot]),
+              G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_PROJECTION);
+    guLookAt(&gGfxPool->mtxLookAt[slot], camera->pos[0], camera->pos[1], camera->pos[2], camera->lookAt[0],
+             camera->lookAt[1], camera->lookAt[2], camera->up[0], camera->up[1], camera->up[2]);
+    if (D_800DC5C8 == 0) {
+        gSPMatrix(gDisplayListHead++, VIRTUAL_TO_PHYSICAL(&gGfxPool->mtxLookAt[slot]),
+                  G_MTX_NOPUSH | G_MTX_MUL | G_MTX_PROJECTION);
+        mtxf_identity(matrix);
+        render_set_position(matrix, 0);
+    } else {
+        gSPMatrix(gDisplayListHead++, VIRTUAL_TO_PHYSICAL(&gGfxPool->mtxLookAt[slot]),
+                  G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    }
+    render_course(&sView);
+    if (D_800DC5C8 == 1) {
+        gSPMatrix(gDisplayListHead++, VIRTUAL_TO_PHYSICAL(&gGfxPool->mtxLookAt[slot]),
+                  G_MTX_NOPUSH | G_MTX_MUL | G_MTX_PROJECTION);
+        mtxf_identity(matrix);
+        render_set_position(matrix, 0);
+    }
+    render_course_actors(&sView);
+    render_object(mode);
+    switch (slot) {
+        case 0: render_players_on_screen_one(); break;
+        case 1: render_players_on_screen_two(); break;
+        case 2: render_players_on_screen_three(); break;
+        default: render_players_on_screen_four(); break;
+    }
+    func_8029122C(&sView, slot);
+    if (slot == 0) {
+        func_80021B0C();
+    } else if (slot == 1) {
+        func_80021C78();
+    }
+    render_item_boxes(&sView);
+    render_player_snow_effect(mode);
+    func_80058BF4();
+    if (D_800DC5B8 != 0) {
+        func_80058C20(mode);
+    }
+    func_80093A5C(mode);
+    if (D_800DC5B8 != 0) {
+        render_hud(mode);
+    }
+    sNetPathCounter = sView.pathCounter;
+}
+
+/* After init_hud(): the local player's HUD at full-screen positions.  The
+ * split-screen initialiser put it in one half; these are the corresponding
+ * whole-screen spots (timer top right, lap bottom right, rank bottom left,
+ * item window top left, the countdown centred). */
+void port_net_hud_layout(void) {
+    hud_player* h = &playerHUD[port_net_local_slot()];
+    h->timerX = 0xEA;
+    h->timerY = 0x10;
+    h->lapX = 0x101;
+    h->lapY = 0xDA;
+    h->rankX = 0x34;
+    h->rankY = 0xD2;
+    h->itemBoxX = -0x53;
+    h->itemBoxY = gModeSelection == BATTLE ? 0x5E : 0x22;
+    h->unk_4A = 0xA0;
+    h->unk_4C = 0x78;
+}
+#endif

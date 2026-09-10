@@ -38,6 +38,9 @@
 #include "data/some_data.h"
 #ifdef TARGET_PSP
 #include "port/port.h"
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#endif
 #endif
 
 //! @warning this macro is undef'd at the end of this file
@@ -1006,6 +1009,17 @@ void func_8005902C(void) {
 void func_800590D4(void) {
     if (D_8018D2A4 != 0) {
         if (gModeSelection != BATTLE) {
+#ifdef PORT_NET
+            if (port_net_active()) {
+                // ad hoc: this screen shows one player; only that player's rank
+                if (gPlayerCountSelection1 <= 2) {
+                    func_8004E800(port_net_local_slot());
+                } else {
+                    func_8004E998(port_net_local_slot());
+                }
+                return;
+            }
+#endif
             switch (gPlayerCountSelection1) {
                 case 1:
                     if (gModeSelection != TIME_TRIALS) {
@@ -1045,6 +1059,19 @@ void func_800591B4(void) {
                     func_800514BC();
                 }
                 if ((!gDemoMode) && (D_801657E8 != false)) {
+#ifdef PORT_NET
+                    if (port_net_active()) {
+                        // ad hoc: this screen's player only
+                        s32 slot = port_net_local_slot();
+                        if (D_80165800[slot] != 0) {
+                            func_8004EE54(slot);
+                            if (gModeSelection != BATTLE) {
+                                render_mini_map_finish_line(slot);
+                            }
+                            func_8004F3E4(slot);
+                        }
+                    } else
+#endif
                     if (D_80165800[0] != 0) {
                         func_8004EE54(0);
                         if (gModeSelection != BATTLE) {
@@ -1052,7 +1079,11 @@ void func_800591B4(void) {
                         }
                         func_8004F3E4(0);
                     }
-                    if ((gScreenModeSelection == SCREEN_MODE_2P_SPLITSCREEN_HORIZONTAL) && (D_80165800[1] != 0)) {
+                    if (
+#ifdef PORT_NET
+                        !port_net_active() &&
+#endif
+                        (gScreenModeSelection == SCREEN_MODE_2P_SPLITSCREEN_HORIZONTAL) && (D_80165800[1] != 0)) {
                         func_8004EE54(1);
                         if (gModeSelection != BATTLE) {
                             render_mini_map_finish_line(1);

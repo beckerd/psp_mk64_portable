@@ -59,11 +59,20 @@ Nothing held: single player, the network code is idle.
    The network stack costs about 350 KB and leaves 1.25 MB, so memory is not a
    blocker.  The transport connects a group on hardware; the PDP socket was
    created (no peer was present).
-3. **Full-screen local view**: render only the local slot's camera, in the
-   single-player layout (wide FOV, anchored HUD) while the simulation stays in
-   2P mode.  The 2P code path ties screen mode to viewport layout in about a
-   dozen files (render_player.c, code_80057C60.c, spawn_players.c,
-   skybox_and_splitscreen.c, camera.c, race_logic.c).
+3. **Full-screen local view** (done 2026-09-10): `port_render_local_player()`
+   in skybox_and_splitscreen.c walks the single-player render sequence with
+   every player-one resource indexed by the local slot (camera, zoom, matrices,
+   skybox buffer, kart renderer) through a shadow of the player's screen struct
+   whose viewport is the whole screen, at the wide FOV and the 1P geometry
+   mode.  The HUD is the game's split-screen drawers for that player at
+   full-screen coordinates (`port_net_hud_layout()`); only the local rank, map
+   and lap/time/item draw; the split-screen divider and the position-portrait
+   pair are skipped in a session.  Verified: two PPSSPP instances, each showing
+   its own kart full screen, zero desyncs, pause menu works.
+   Left for polish: the 1P position-portrait column (the 2P HUD animates the
+   portraits into its own layout every frame), the mini-map at 1P
+   coordinates for slot 0, the kart shadows for slots 2-3 (func_80021B0C /
+   func_80021C78 only cover two screens), the ceremony/results camera.
 4. **Two real PSPs**: ad hoc transport on hardware, latency and loss tuning.
 5. **Lobby**: host/join screen, player count 2-4, drop-out handling (a peer
    that leaves becomes a parked kart or the race ends).

@@ -47,4 +47,9 @@ void port_net_frame_end(void);
 /* The local pad as the game would read it without a session (shim). */
 void port_local_pad(OSContPad* pad);
 
+/* Game side (skybox_and_splitscreen.c): draw the local slot's camera full screen
+ * in the single-player layout; install its HUD coordinates after init_hud(). */
+void port_render_local_player(void);
+void port_net_hud_layout(void);
+
 #endif

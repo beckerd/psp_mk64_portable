@@ -4,6 +4,10 @@
  **/
 
 #include <ultra64.h>
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#include "port/port.h"
+#endif
 #include <mk64.h>
 #include <PR/gbi.h>
 #include <macros.h>
@@ -2725,6 +2729,15 @@ void func_80050320(void) {
     s32 lapCount;
     s32 var_a0;
 
+#ifdef PORT_NET
+    if (port_net_active() && gRaceState < RACE_HUMAN_FINISHED) {
+        // ad hoc, during the race: the split-screen HUD runs this position
+        // display in its 8-portrait mode, stacked beside the divider; the rank
+        // is on the screen already.  The results row after the finish still
+        // draws.  TODO: the single-player column instead.
+        return;
+    }
+#endif
     if (D_801657E2 == 0) {
         for (var_s0 = 0; var_s0 < 4; var_s0++) {
             var_a0 = 0;
@@ -2735,7 +2748,12 @@ void func_80050320(void) {
                 temp_v0 = gGPCurrentRacePlayerIdByRank[var_s0];
                 characterId = gGPCurrentRaceCharacterIdByRank[var_s0];
                 lapCount = gLapCountByPlayerId[temp_v0];
+#ifdef PORT_NET
+                if (port_net_active() ? characterId == (gPlayerOne + port_net_local_slot())->characterId
+                                      : characterId == gPlayerOne->characterId) {
+#else
                 if (characterId == gPlayerOne->characterId) {
+#endif
                     func_8004FDB4(D_8018D028[var_s0], D_8018D050[var_s0], var_s0, lapCount, characterId, 0x000000FF, 1,
                                   var_a0, 0);
                 } else {
@@ -2956,6 +2974,15 @@ void func_80050E34(s32 playerId, s32 arg1) {
     lapCount = gLapCountByPlayerId[playerId];
     characterId = player->characterId;
     objectIndex = D_8018CE10[playerId].objectIndex;
+#ifdef PORT_NET
+    if (port_net_active() && gRaceState < RACE_HUMAN_FINISHED) {
+        // ad hoc, during the race: the split-screen position portraits sit
+        // beside the divider; the rank is on the screen already.
+        // TODO: the single-player column instead.
+        (void) dummy; (void) lapCount; (void) characterId; (void) objectIndex;
+        return;
+    }
+#endif
 
     if (gPlayerCountSelection1 == 1) {
         spC4 = 0x00000012;

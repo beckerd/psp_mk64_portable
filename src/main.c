@@ -42,6 +42,9 @@
 #ifndef TARGET_N64
 #include <string.h>
 #include "port/port.h"
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#endif
 static u32 sPortTraceFrames = 6;
 #define PORT_TRACE(...) if (sPortTraceFrames != 0) PORT_LOG(__VA_ARGS__)
 #ifndef PORT_ENABLE_AUDIO
@@ -773,6 +776,11 @@ void race_logic_loop(void) {
                 select_framebuffer();
             }
             D_8015F788 = 0;
+#ifdef PORT_NET
+            if (port_net_active()) {
+                port_render_local_player(); // ad hoc: this machine's player, full screen
+            } else
+#endif
             if (gPlayerWinningIndex == 0) {
                 render_player_two_2p_screen_vertical();
                 render_player_one_2p_screen_vertical();
@@ -819,6 +827,11 @@ void race_logic_loop(void) {
                 select_framebuffer();
             }
             D_8015F788 = 0;
+#ifdef PORT_NET
+            if (port_net_active()) {
+                port_render_local_player(); // ad hoc: this machine's player, full screen
+            } else
+#endif
             if (gPlayerWinningIndex == 0) {
                 render_player_two_2p_screen_horizontal();
                 render_player_one_2p_screen_horizontal();
