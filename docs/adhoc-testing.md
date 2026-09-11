@@ -1,5 +1,28 @@
 # Ad hoc test notes (for testers)
 
+## Please do this ONE run (it tells us what we need)
+
+1. Both PSPs: make sure `EBOOT.PBP` in `ms0:/PSP/GAME/MK64Portable/` is the
+   one from this download.  Its MD5 is 452e9cf674b3585584ab7fd093cba1c3 --
+   if you can check it, please confirm both match.  Both units MUST be the
+   same build.
+2. Reboot both PSPs first (fully off, then on), so the logs start clean.
+3. WLAN switch on.  Set up the SAME race on both: 2P GAME, VS, and the same
+   class.  One hosts, one joins.
+4. Play one 2P VS race to the finish (or until the karts clearly stop
+   agreeing -- the other kart driving into walls, wrong item, wrong
+   positions).  You do not need to do anything special; just race.
+5. Send back, from BOTH PSPs:
+       ms0:/PSP/GAME/MK64Portable/data/log.txt
+       ms0:/PSP/GAME/MK64Portable/data/log_prev.txt
+   and tell me: the model of each PSP (1000 / 2000 / 3000 / Go), and whether
+   the two games looked in sync the whole race or drifted apart (and roughly
+   when).  That is everything I need.
+
+The rest below is general reference; the run above is the important part.
+
+---
+
 This build adds PSP-to-PSP ad hoc play to the 2P/3P/4P modes.  Two or more
 PSPs, each with this build in `ms0:/PSP/GAME/MK64Portable/` (EBOOT.PBP plus
 the ROM, the same as the normal install).
