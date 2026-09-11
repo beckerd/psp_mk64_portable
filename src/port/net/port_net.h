@@ -27,7 +27,8 @@ void net_transport_term(void);
 const u8* net_transport_local_id(void);
 int net_transport_send(const void* pkt, int len);                /* to every peer */
 int net_transport_recv(void* buf, int max, u8 from[NET_ID_LEN]); /* bytes, 0 = nothing pending */
-const char* net_transport_status(void);                          /* one line for the waiting screen */
+const char* net_transport_status(void);
+const char* net_transport_stats(void); /* traffic / error counters for the log */                          /* one line for the waiting screen */
 
 /* Session ------------------------------------------------------------------ */
 int port_net_boot(void); /* nothing now: the session starts from the game select */

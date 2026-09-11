@@ -852,7 +852,7 @@ int port_net_frame_begin(void) {
         in.button = pad.button; in.sx = pad.stick_x; in.sy = pad.stick_y;
         in.flags = sRole == NET_ROLE_HOST ? sHostFlags : 0;
         store_input(sSlot, sFrame + INPUT_DELAY, &in);
-        if ((sFrame % 60) == 0) PORT_LOG("net: frame %u (%u stalls)\n", (unsigned) sFrame, (unsigned) sStalls);
+        if ((sFrame % 60) == 0) PORT_LOG("net: frame %u (%u stalls) %s\n", (unsigned) sFrame, (unsigned) sStalls, net_transport_stats());
     }
     if ((sFrame % CHECK_EVERY) == 0) {
         int idx = (sFrame / CHECK_EVERY) % 16;
@@ -873,7 +873,7 @@ int port_net_frame_begin(void) {
             if (s == sSlot) { PORT_LOG("net: BUG: no local input for frame %u\n", (unsigned) sFrame); store_input(s, sFrame, &in); continue; }
             if (sStallSlot != s) { sStallSlot = s; sStallSinceUs = now; }
             sStalls++;
-            if (sStalls - sLastStallLog >= 200) { sLastStallLog = sStalls; PORT_LOG("net: frame %u waiting for slot %d (%u stalls so far)\n", (unsigned) sFrame, s, (unsigned) sStalls); }
+            if (sStalls - sLastStallLog >= 200) { sLastStallLog = sStalls; PORT_LOG("net: frame %u waiting for slot %d (%u stalls so far, %u ms) %s\n", (unsigned) sFrame, s, (unsigned) sStalls, (unsigned) ((now - sStallSinceUs) / 1000u), net_transport_stats()); }
             if (sRole == NET_ROLE_HOST && now - sStallSinceUs >= DROP_AFTER_US) {
                 drop_slot(s, sFrame, "no input"); /* from this frame on: neutral, on every machine */
                 sModalSlot = s;

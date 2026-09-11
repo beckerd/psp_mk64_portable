@@ -27,6 +27,7 @@ static int sPdp = -1;
 static u8 sMac[NET_ID_LEN];
 static char sStatus[96];
 static int sLoaded[2];
+static u32 sTx, sRx, sTxErr, sRxErr, sLastErr; /* counters for the frame log (net_transport_stats) */
 
 static void log_mem(const char* where) {
     PORT_LOG("net: %s: free %u KB, largest block %u KB\n", where, (unsigned) sceKernelTotalFreeMemSize() / 1024u,
@@ -103,18 +104,36 @@ const u8* net_transport_local_id(void) {
 int net_transport_send(const void* pkt, int len) {
     static u8 bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
     int rc = sceNetAdhocPdpSend(sPdp, bcast, ADHOC_PORT, (void*) pkt, (unsigned) len, 0, 1);
-    return rc < 0 ? rc : len;
+    if (rc < 0) { sTxErr++; sLastErr = (u32) rc; return rc; }
+    sTx++;
+    return len;
 }
 
 int net_transport_recv(void* buf, int max, u8 from[NET_ID_LEN]) {
     unsigned short port;
     int len = max;
     int rc = sceNetAdhocPdpRecv(sPdp, from, &port, buf, &len, 0, 1);
-    if (rc < 0) return 0; /* nothing pending (0x80410709) or an error: treat as no data */
+    if (rc < 0) {
+        if ((u32) rc != 0x80410709u) { sRxErr++; sLastErr = (u32) rc; } /* anything but "would block" */
+        return 0;
+    }
+    sRx++;
     return len;
 }
 
 const char* net_transport_status(void) {
     return sStatus;
+}
+
+/* One line for the frame log: traffic, errors, the adhocctl state (1 =
+ * connected) and free memory -- what a "disconnected after a minute" report
+ * needs to tell a dead radio from a stuck game. */
+const char* net_transport_stats(void) {
+    static char line[128];
+    int state = -1;
+    sceNetAdhocctlGetState(&state);
+    snprintf(line, sizeof(line), "tx %u rx %u txerr %u rxerr %u last %08X ctl %d free %u KB", (unsigned) sTx, (unsigned) sRx,
+             (unsigned) sTxErr, (unsigned) sRxErr, (unsigned) sLastErr, state, (unsigned) sceKernelTotalFreeMemSize() / 1024u);
+    return line;
 }
 #endif

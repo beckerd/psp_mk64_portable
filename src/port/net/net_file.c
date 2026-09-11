@@ -117,4 +117,5 @@ int net_transport_recv(void* buf, int max, u8 from[NET_ID_LEN]) {
 const char* net_transport_status(void) {
     return sStatus;
 }
+const char* net_transport_stats(void) { return "file transport"; }
 #endif

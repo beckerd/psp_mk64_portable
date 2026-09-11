@@ -291,6 +291,16 @@ int main(UNUSED int argc, char** argv) {
     port_fs_init();
     port_audio_out_init();
     PORT_LOG("boot\n");
+    { /* test knob: a data/cpu222 file runs the CPU at 222 MHz (the PSP-1000's WLAN is unhappy at 333) */
+        FILE* f = fopen(port_save_path("cpu222"), "rb");
+        if (f != NULL) {
+            fclose(f);
+            scePowerSetClockFrequency(222, 222, 111);
+            PORT_LOG("cpu: 222 MHz (data/cpu222 present)\n");
+        } else {
+            PORT_LOG("cpu: 333 MHz\n");
+        }
+    }
 
     gfx_init(&gfx_psp, &gfx_opengl_api, "MK64 Portable", false);
     port_debug_selftest(); // PORT_GFX_SELFTEST builds only

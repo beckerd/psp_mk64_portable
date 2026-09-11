@@ -31,6 +31,17 @@ Things worth trying, in this order:
 - Mid-race, the HOST presses HOME and quits: after about six seconds each
   joiner pauses with "HOST EXITED THE GAME" and a MAIN MENU button.
 
+## If the players get disconnected during a race
+
+Please note roughly how long into the race it happened and what each screen
+showed, and send the logs (below).  Then one more try: put an empty file
+named `cpu222` (no extension) into `ms0:/PSP/GAME/MK64Portable/data/` on
+BOTH PSPs and race again.  That runs the game at 222 MHz instead of 333;
+the original PSP-1000's WLAN is known to misbehave at 333 MHz.  Say whether
+it made a difference, and which PSP models (1000 / 2000 / 3000 / Go) were
+used.  Also check Settings > Power Save Settings > WLAN Power Save on each
+PSP and say whether it is on.
+
 ## What to send back
 
 From EVERY PSP that took part, the two files
