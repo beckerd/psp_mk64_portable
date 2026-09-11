@@ -155,6 +155,7 @@ void* port_seg_to_ptr(uintptr_t addr) {
 /* ------------------------------------------------------------------------- */
 
 extern u32 port_time_us(void);
+static u32 sLogCostMs;
 void port_log(const char* fmt, ...) {
     char buf[256];
     va_list ap;
@@ -194,5 +195,10 @@ void port_log(const char* fmt, ...) {
                 sLastClose = now;
             }
         }
+        { /* how long the memory stick held us up (the frame log reports the worst) */
+            u32 took = (port_time_us() - now) / 1000u;
+            if (took > sLogCostMs) sLogCostMs = took;
+        }
     }
 }
+u32 port_log_cost_ms(void) { u32 m = sLogCostMs; sLogCostMs = 0; return m; }

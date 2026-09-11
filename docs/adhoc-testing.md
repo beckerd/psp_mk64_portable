@@ -31,6 +31,14 @@ Things worth trying, in this order:
 - Mid-race, the HOST presses HOME and quits: after about six seconds each
   joiner pauses with "HOST EXITED THE GAME" and a MAIN MENU button.
 
+## If the two games stop agreeing (the other kart drives into walls, items differ)
+
+That is a desync, not a dropped link: the log on each PSP prints "DESYNC at
+frame N -- differs in: ..." lines from the first mismatch on.  Nothing to
+do in the moment; just send both logs.  The "net: state check" lines near
+the start of the session and every 20 s are there to be compared side by
+side.
+
 ## If the players get disconnected during a race
 
 Please note roughly how long into the race it happened and what each screen

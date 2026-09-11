@@ -62,6 +62,7 @@ typedef struct NetPktTag {
     u32 frame;       /* INPUT: frame of in[0].  START: 0 */
     u32 check_frame; /* latest state checksum the sender has */
     u32 checksum;
+    u32 parts[4];    /* its components: players, RNG seed, timers, game state -- a DESYNC names the culprit */
     u8 ids[NET_MAX_PLAYERS][NET_ID_LEN]; /* START: slot -> transport id */
     u8 players, delay, dropped, mode;    /* dropped: bitmask (host's word); mode/cc: the race (ADVERT/HELLO/START) */
     u8 cc, pad0, pad1, pad2;
@@ -77,7 +78,7 @@ static u8 sIds[NET_MAX_PLAYERS][NET_ID_LEN];
 static int sKnown[NET_MAX_PLAYERS]; /* host: slot has a peer */
 static NetInput sRing[NET_MAX_PLAYERS][RING];
 static u32 sHave[NET_MAX_PLAYERS][RING]; /* frame stored in that ring slot, ~0 = none */
-static struct { u32 frame, sum; } sMyCheck[16];
+static struct { u32 frame, sum, parts[4]; } sMyCheck[16];
 static u32 sLastReported[NET_MAX_PLAYERS];
 static u32 sStalls, sLastStallLog;
 static u8 sDropped;                          /* bitmask */
@@ -117,8 +118,8 @@ static u32 fnv(u32 h, const void* p, u32 n) {
 }
 
 /* State that must agree on every machine after the same inputs. */
-static u32 state_checksum(void) {
-    u32 h = 2166136261u;
+static u32 state_checksum(u32 parts[4]) {
+    u32 h = 2166136261u, hp;
     int i;
     for (i = 0; i < 8; i++) {
         h = fnv(h, gPlayers[i].pos, sizeof(gPlayers[i].pos));
@@ -126,12 +127,28 @@ static u32 state_checksum(void) {
         h = fnv(h, &gPlayers[i].speed, sizeof(gPlayers[i].speed));
         h = fnv(h, gPlayers[i].rotation, sizeof(gPlayers[i].rotation));
     }
+    parts[0] = h;
+    hp = fnv(2166136261u, &gRandomSeed16, sizeof(gRandomSeed16));
+    parts[1] = hp;
     h = fnv(h, &gRandomSeed16, sizeof(gRandomSeed16));
+    hp = fnv(2166136261u, &gCourseTimer, sizeof(gCourseTimer));
+    hp = fnv(hp, &gGlobalTimer, sizeof(gGlobalTimer));
+    parts[2] = hp;
     h = fnv(h, &gCourseTimer, sizeof(gCourseTimer));
+    hp = fnv(2166136261u, &gGamestate, sizeof(gGamestate));
+    hp = fnv(hp, &gMenuSelection, sizeof(gMenuSelection));
+    parts[3] = hp;
     h = fnv(h, &gGamestate, sizeof(gGamestate));
     h = fnv(h, &gMenuSelection, sizeof(gMenuSelection));
     h = fnv(h, &gGlobalTimer, sizeof(gGlobalTimer));
     return h;
+}
+/* The checked state in the clear, for comparing two machines' logs by eye. */
+static void log_state(const char* why, u32 frame) {
+    PORT_LOG("net: state %s f%u: seed %04X gt %d ct %d gs %d menu %d race %d p0 %.2f %.2f %.2f s %.2f p1 %.2f %.2f %.2f s %.2f\n", why,
+             (unsigned) frame, (unsigned) gRandomSeed16, (int) gGlobalTimer, (int) gCourseTimer, (int) gGamestate, (int) gMenuSelection,
+             (int) gRaceState, gPlayers[0].pos[0], gPlayers[0].pos[1], gPlayers[0].pos[2], gPlayers[0].speed, gPlayers[1].pos[0],
+             gPlayers[1].pos[1], gPlayers[1].pos[2], gPlayers[1].speed);
 }
 
 static int slot_of(const u8 id[NET_ID_LEN]) {
@@ -188,7 +205,7 @@ static void send_hello(void) {
     send_pkt(&p);
 }
 
-static void latest_check(u32* frame, u32* sum) {
+static void latest_check(u32* frame, u32* sum, u32 parts[4]) {
     int i, best = -1;
     for (i = 0; i < 16; i++) {
         if (sMyCheck[i].frame != ~0u && (best < 0 || sMyCheck[i].frame > sMyCheck[best].frame)) best = i;
@@ -196,6 +213,7 @@ static void latest_check(u32* frame, u32* sum) {
     if (best < 0) { *frame = ~0u; *sum = 0; return; }
     *frame = sMyCheck[best].frame;
     *sum = sMyCheck[best].sum;
+    memcpy(parts, sMyCheck[best].parts, sizeof(sMyCheck[best].parts));
 }
 
 /* The last REDUNDANCY frames of `slot`'s inputs that we hold, ending at the
@@ -214,7 +232,7 @@ static void send_slot_inputs(int slot, u32 last) {
     for (f = first; f <= last; f++) {
         p.in[p.count++] = sRing[slot][f & (RING - 1)];
     }
-    latest_check(&p.check_frame, &p.checksum);
+    latest_check(&p.check_frame, &p.checksum, p.parts);
     fill_drop(&p);
     send_pkt(&p);
 }
@@ -335,7 +353,10 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
             if (sMyCheck[idx].frame == p->check_frame && sMyCheck[idx].sum != p->checksum && sLastReported[slot] != p->check_frame) {
                 sLastReported[slot] = p->check_frame;
                 gPortNetDesync = 1;
-                PORT_LOG("net: DESYNC at frame %u: ours %08X, slot %d %08X\n", (unsigned) p->check_frame, (unsigned) sMyCheck[idx].sum, slot, (unsigned) p->checksum);
+                PORT_LOG("net: DESYNC at frame %u: ours %08X, slot %d %08X -- differs in:%s%s%s%s\n", (unsigned) p->check_frame, (unsigned) sMyCheck[idx].sum, slot, (unsigned) p->checksum,
+                         sMyCheck[idx].parts[0] != p->parts[0] ? " players" : "", sMyCheck[idx].parts[1] != p->parts[1] ? " seed" : "",
+                         sMyCheck[idx].parts[2] != p->parts[2] ? " timers" : "", sMyCheck[idx].parts[3] != p->parts[3] ? " gamestate" : "");
+                log_state("at desync", sFrame);
             }
         }
     }
@@ -852,12 +873,13 @@ int port_net_frame_begin(void) {
         in.button = pad.button; in.sx = pad.stick_x; in.sy = pad.stick_y;
         in.flags = sRole == NET_ROLE_HOST ? sHostFlags : 0;
         store_input(sSlot, sFrame + INPUT_DELAY, &in);
-        if ((sFrame % 60) == 0) PORT_LOG("net: frame %u (%u stalls) %s\n", (unsigned) sFrame, (unsigned) sStalls, net_transport_stats());
+        if ((sFrame % 60) == 0) { extern u32 port_log_cost_ms(void); u32 lm = port_log_cost_ms(); PORT_LOG("net: frame %u (%u stalls) %s logms %u\n", (unsigned) sFrame, (unsigned) sStalls, net_transport_stats(), (unsigned) lm); }
     }
     if ((sFrame % CHECK_EVERY) == 0) {
         int idx = (sFrame / CHECK_EVERY) % 16;
         sMyCheck[idx].frame = sFrame;
-        sMyCheck[idx].sum = state_checksum();
+        sMyCheck[idx].sum = state_checksum(sMyCheck[idx].parts);
+        if (sFrame <= 90 || (sFrame % 600) == 0) log_state("check", sFrame); /* the first four checks, then every 20 s */
     }
     /* Send once per new frame; while stalled, resend every 50 ms (loss cover)
      * rather than on every retry -- a flood only slows the peer down. */
