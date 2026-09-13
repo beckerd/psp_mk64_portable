@@ -152,6 +152,7 @@ static u32 state_checksum(u32 parts[4]) {
             hp = fnv(hp, &gPlayerPositionLUT[k], sizeof(gPlayerPositionLUT[k]));
         }
         hp = fnv(hp, &gRaceState, sizeof(gRaceState));
+        { extern s32 gPlayerWinningIndex; hp = fnv(hp, &gPlayerWinningIndex, sizeof(gPlayerWinningIndex)); } /* the winner (#2) */
     }
     parts[3] = hp;
     h = fnv(h, &hp, sizeof(hp)); /* fold the lap/rank/winner state into the master sum */
@@ -926,6 +927,16 @@ int port_net_frame_begin(void) {
         return 1;
     }
     poll();
+    if (sEnded) { /* poll() may have just ended the session (a drop that dropped us,
+                   * or a lost host); do not run this frame's pause/resume logic (#1) */
+        if (sSampled != sFrame) {
+            sSampled = sFrame;
+            port_local_pad(&pad);
+            in.button = pad.button; in.sx = pad.stick_x; in.sy = pad.stick_y; in.flags = 0;
+            store_input(sSlot, sFrame, &in);
+        }
+        return 1;
+    }
     if (sRole == NET_ROLE_HOST && sFrame < 90) send_start(); /* cover a lost START */
     /* Our input for frame F + delay: sampled once per frame (a stall retry
      * must not re-read the pad -- the debug input script counts frames by it). */
