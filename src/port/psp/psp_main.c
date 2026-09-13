@@ -262,7 +262,29 @@ void port_fs_mkdir(const char* path) {
 }
 
 static u32 sFrame;
+#ifdef PORT_STACK_POISON
+/* Reproduce two-PSP divergence in the emulator: two emulator instances execute
+ * identically, so their stack garbage matches and uninitialized locals never
+ * differ.  Fill the unused stack below us with an instance-specific byte
+ * (data/poison, 1 byte) so any uninitialized local read shows up as a desync,
+ * exactly as it would between two real PSPs with different RAM history. */
+static int sPoison = -1;
+static void poison_stack(void) {
+    volatile char probe;
+    char* sp = (char*) &probe;
+    if (sPoison < 0) {
+        FILE* f = fopen(port_save_path("poison"), "rb");
+        sPoison = f ? (fgetc(f) & 0xFF) : 0;
+        if (f) fclose(f);
+        PORT_LOG("stack poison: 0x%02X\n", sPoison);
+    }
+    if (sPoison) memset(sp - 0xC000, sPoison, 0xC000 - 0x400); /* 48KB below SP, 1KB guard */
+}
+#endif
 static void run_one_iteration(void) {
+#ifdef PORT_STACK_POISON
+    poison_stack();
+#endif
 #ifdef PORT_NET
     port_net_modal_update(); /* the drop-out prompts read the local pad directly */
     if (port_net_active() && !port_net_frame_begin()) {

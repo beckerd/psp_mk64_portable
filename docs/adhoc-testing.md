@@ -1,25 +1,23 @@
 # Ad hoc test notes (for testers)
 
-## Please do this ONE run (it tells us what we need)
+## Build 5: one race, both logs (this may already be fixed)
 
-1. Both PSPs: make sure `EBOOT.PBP` in `ms0:/PSP/GAME/MK64Portable/` is the
-   one from this download.  Its MD5 is 452e9cf674b3585584ab7fd093cba1c3 --
-   if you can check it, please confirm both match.  Both units MUST be the
-   same build.
-2. Reboot both PSPs first (fully off, then on), so the logs start clean.
-3. WLAN switch on.  Set up the SAME race on both: 2P GAME, VS, and the same
-   class.  One hosts, one joins.
-4. Play one 2P VS race to the finish (or until the karts clearly stop
-   agreeing -- the other kart driving into walls, wrong item, wrong
-   positions).  You do not need to do anything special; just race.
-5. Send back, from BOTH PSPs:
-       ms0:/PSP/GAME/MK64Portable/data/log.txt
-       ms0:/PSP/GAME/MK64Portable/data/log_prev.txt
-   and tell me: the model of each PSP (1000 / 2000 / 3000 / Go), and whether
-   the two games looked in sync the whole race or drifted apart (and roughly
-   when).  That is everything I need.
+I fixed a bug that could make two consoles drift apart mid-race.  This build
+also records extra detail so that, if it still happens, one race pins down
+the exact cause.
 
-The rest below is general reference; the run above is the important part.
+1. Both PSPs: confirm the EBOOT is this build (MD5 e02b53e953764163f8e4e8be02eff3d0), and reboot both so
+   the logs start clean.
+2. WLAN on.  Set up the SAME 2P VS race, one hosts, one joins.
+3. Race one race to the finish, or until the two screens clearly disagree
+   (a kart driving into walls, both players "winning").  Try to keep other
+   2.4 GHz gear (a PS5 and its controller, Wi-Fi) away, since that causes the
+   lag.
+4. Send back log.txt AND log_prev.txt from BOTH PSPs, and say whether the two
+   screens stayed in agreement or drifted, and roughly when.
+
+That is all.  The logs now include "PDUMP" lines; they are for me to compare
+the two consoles and are meant to be large.
 
 ---
 

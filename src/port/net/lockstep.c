@@ -143,6 +143,21 @@ static u32 state_checksum(u32 parts[4]) {
     h = fnv(h, &gGlobalTimer, sizeof(gGlobalTimer));
     return h;
 }
+/* Full player-struct dump for pinpointing a desync: two machines' logs diffed
+ * at the last synced checkpoint show the first field that drifted, before it
+ * reached the position the narrow checksum watches.  gPlayers is a static, at
+ * the same address on both PSPs, so pointer fields that target other statics
+ * match and only the truly diverging bytes differ. */
+static void dump_player(u32 frame, int slot) {
+    const unsigned char* b = (const unsigned char*) &gPlayers[slot];
+    unsigned n = (unsigned) sizeof(gPlayers[slot]);
+    unsigned off;
+    for (off = 0; off < n; off += 16) {
+        char line[64]; int i, k = 0;
+        for (i = 0; i < 16 && off + i < n; i++) k += snprintf(line + k, sizeof(line) - k, "%02X", b[off + i]);
+        PORT_LOG("PDUMP f%u p%d +%04X %s\n", (unsigned) frame, slot, off, line);
+    }
+}
 /* The checked state in the clear, for comparing two machines' logs by eye. */
 static void log_state(const char* why, u32 frame) {
     PORT_LOG("net: state %s f%u: seed %04X gt %d ct %d gs %d menu %d race %d p0 %.2f %.2f %.2f s %.2f p1 %.2f %.2f %.2f s %.2f\n", why,
@@ -357,6 +372,7 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
                          sMyCheck[idx].parts[0] != p->parts[0] ? " players" : "", sMyCheck[idx].parts[1] != p->parts[1] ? " seed" : "",
                          sMyCheck[idx].parts[2] != p->parts[2] ? " timers" : "", sMyCheck[idx].parts[3] != p->parts[3] ? " gamestate" : "");
                 log_state("at desync", sFrame);
+                { static int dumped; if (!dumped) { dumped = 1; dump_player(sFrame, 0); dump_player(sFrame, 1); } }
             }
         }
     }
@@ -880,6 +896,9 @@ int port_net_frame_begin(void) {
         sMyCheck[idx].frame = sFrame;
         sMyCheck[idx].sum = state_checksum(sMyCheck[idx].parts);
         if (sFrame <= 90 || (sFrame % 600) == 0) log_state("check", sFrame); /* the first four checks, then every 20 s */
+        if (sFrame == 600 || sFrame == 900 || sFrame == 1200 || sFrame == 1500 || sFrame == 1800) {
+            dump_player(sFrame, 0); dump_player(sFrame, 1); /* checkpoints to diff two machines' state before the drift reaches position */
+        }
     }
     /* Send once per new frame; while stalled, resend every 50 ms (loss cover)
      * rather than on every retry -- a flood only slows the peer down. */
