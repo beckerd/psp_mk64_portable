@@ -183,6 +183,9 @@ void setup_race(void) {
     struct Controller* controller;
     int i;
 
+#ifdef PORT_NET
+    port_net_race_begin();
+#endif
     gPlayerCountSelection1 = gPlayerCount;
     if (gGamestate != RACING) {
         gIsMirrorMode = 0;

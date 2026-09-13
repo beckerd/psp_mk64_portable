@@ -11,8 +11,7 @@
  * the broadcast), and decides drop-outs: a slot whose input the host has
  * waited DROP_AFTER_US for is declared dropped from that frame on and reads as
  * a neutral pad on every machine from that same frame, so the survivors stay
- * in step.  A client that hears nothing from the host for GIVEUP_AFTER_US
- * drops everyone else and plays on alone.
+ * in step.  A client that loses the host stops with a connection prompt.
  */
 #ifdef PORT_NET
 #include <ultra64.h>
@@ -35,6 +34,7 @@
 #include "replays.h"
 #include "racing/race_logic.h"
 #include "code_800029B0.h"
+#include "cpu_vehicles_camera_path.h"
 
 #define RING 128
 #define INPUT_DELAY 2
@@ -55,10 +55,21 @@ enum { PKT_HELLO = 1, PKT_START = 2, PKT_INPUT = 3, PKT_ADVERT = 4, PKT_RESULT =
 #define NETIN_PAUSE 1 /* the host's drop-out prompt is up: the game is paused */
 #define NETIN_END 2   /* the host chose EXIT: the session ends at this frame */
 typedef struct { u16 button; s8 sx, sy; u8 flags; } NetInput;
+enum { RESULT_DATA = 1, RESULT_ACK = 3, RESULT_ABORT = 4 };
+/* All eight ranks are needed for GP, including its CPU racers.  The first
+ * 32 NMI bytes contain both VS placement totals and Battle wins. */
+typedef struct {
+    s32 winner, demo_timer, gp_qualified;
+    s8 rank[NUM_PLAYERS], gp_points[NUM_PLAYERS];
+    u16 player_type[NUM_PLAYERS];
+    u8 scores[32];
+} NetRaceResult;
 /* Naturally aligned (both machines run the same binary); no packing: a packed
  * u32 member would be an unaligned store on MIPS. */
 typedef struct NetPktTag {
     u8 magic, type, slot, count;
+    u32 session;     /* host-generated identity, retained by START retries */
+    u32 race;        /* RESULT/ACK/ABORT: explicit setup_race generation */
     u32 frame;       /* INPUT: frame of in[0].  START: 0 */
     u32 check_frame; /* latest state checksum the sender has */
     u32 checksum;
@@ -69,7 +80,10 @@ typedef struct NetPktTag {
     u16 seed, pad3;                      /* START: gRandomSeed16 */
     s32 gtimer, flash, timing;           /* START: gGlobalTimer, gCycleFlashMenu, gMenuTimingCounter */
     u32 drop_frame[NET_MAX_PLAYERS];     /* first neutral frame per dropped slot */
-    NetInput in[REDUNDANCY];
+    union {
+        NetInput in[REDUNDANCY];
+        NetRaceResult result; /* RESULT: frame = results countdown release frame */
+    };
 } NetPkt;
 
 static int sRole = NET_ROLE_NONE, sRunning, sPlayers = 1, sSlot, sAutoStart;
@@ -92,19 +106,19 @@ static int sLobby, sHaveHost, sJoined; /* client: a matching host was found / it
  * EXIT choice; RESUMING / LEAVING: chosen, waiting for the flag's frame;
  * WAIT_HOST: a joiner while the host decides; HOST_GONE / DROPPED: a joiner
  * with only MAIN MENU left. */
-enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED, MODAL_DESYNC };
+enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED, MODAL_DESYNC, MODAL_RESULT_FAILED };
 static int sModal, sModalSel, sModalSlot, sDesyncHits;
-/* Final-result barrier: at the frame the race finishes, hold the results
- * screen until every console confirms the same result checksum, so a
- * last-moment disagreement never shows two winners. */
-static int sBarrierActive, sBarrierDone;
-static u32 sBarrierSinceUs, sBarrierLastSendUs;
-static u8 sAckGot;                /* host: clients that acknowledged the result */
-static int sHostResultGot;        /* client: the host's authoritative result has arrived */
-static s32 sHostWinner;
-static s32 sHostRank[NET_MAX_PLAYERS];
-static u8 sHostScores[24];        /* pAppNmiBuffer[0..22]: the VS win/placement totals */
-#define NMI_SCORES_LEN 23
+/* The host freezes one result and waits for receipt, never agreement.  It
+ * holds frame F while clients can reach at most F + INPUT_DELAY + 1.  Starting
+ * the results countdown at that shared frame cannot race a delayed packet:
+ * no client has the host's input for it until every client acknowledged. */
+static u32 sSessionId, sRaceId;
+static NetPkt sResultPkt;
+static int sResultGot, sResultReleased, sResultAllAcked;
+static u32 sResultSinceUs, sResultLastSendUs;
+static u8 sResultAck;
+static u32 sSampled = ~0u, sLastInputSendUs;
+static int sJustSampled;
 static u8 sHostFlags;      /* host: the flags it puts in its outgoing inputs */
 static int sEnded;         /* the session is over but the prompt is still up: local pad, everyone else neutral, full-screen view kept */
 static int sAppliedPause;  /* the host's PAUSE flag as applied on this machine */
@@ -115,10 +129,13 @@ static u32 sLastHelloUs;
 enum { LOBBY_NONE, LOBBY_CHOICE, LOBBY_CONNECT_HOST, LOBBY_CONNECT_JOIN, LOBBY_HOSTING, LOBBY_SEARCHING, LOBBY_ERROR };
 static int criteria_match(const struct NetPktTag* p);
 static void session_begin(void);
-static void send_barrier(u8 mode);
+static void send_result(u8 mode);
+static void receive_result(const NetPkt* p, int slot);
+static int result_frame_begin(void);
 int gPortNetDesync;
 
 extern s32 gGlobalTimer;
+extern s32 gDemoTimer;
 extern void controller_psp_read(OSContPad* pad);
 
 static u32 now_us(void) { return sceKernelGetSystemTimeLow(); }
@@ -226,6 +243,7 @@ static void fill_drop(NetPkt* p) {
 
 static void send_pkt(NetPkt* p) {
     p->magic = NET_MAGIC;
+    p->session = sSessionId;
     net_transport_send(p, sizeof(*p));
 }
 
@@ -287,7 +305,10 @@ static void send_slot_inputs(int slot, u32 last) {
     for (f = first; f <= last; f++) {
         p.in[p.count++] = sRing[slot][f & (RING - 1)];
     }
-    latest_check(&p.check_frame, &p.checksum, p.parts);
+    /* A finished client can legitimately be waiting for the host's finish.
+     * Post-finish simulation is not used to decide the authoritative result. */
+    if (sResultGot || (gGamestate == RACING && gRaceState >= RACE_DONE)) p.check_frame = ~0u;
+    else latest_check(&p.check_frame, &p.checksum, p.parts);
     fill_drop(&p);
     send_pkt(&p);
 }
@@ -324,6 +345,8 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
     int slot, from_host;
     if (p->magic != NET_MAGIC) return;
     from_host = memcmp(sIds[0], from, NET_ID_LEN) == 0;
+    /* A joiner still retrying HELLO has not received its session ID yet. */
+    if (sRunning && p->type != PKT_HELLO && p->session != sSessionId) return;
     if (from_host && sRole == NET_ROLE_CLIENT) sLastHostPktUs = now_us();
     if (p->type == PKT_ADVERT) {
         if (sRole != NET_ROLE_CLIENT || sRunning || sLobby != LOBBY_SEARCHING) return;
@@ -378,6 +401,7 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
         slot = slot_of(net_transport_local_id());
         if (slot < 0) { PORT_LOG("net: START without our id\n"); return; }
         sSlot = slot;
+        sSessionId = p->session;
         /* The host's state at its OK press: what the character select and
          * everything after it derive from. */
         gRandomSeed16 = p->seed;
@@ -390,21 +414,14 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
     }
     if (p->type == PKT_RESULT) {
         int rs = slot_of(from);
-        if (rs < 0 || rs >= sPlayers) return;
-        if (p->mode == 1 && rs == 0 && sRole == NET_ROLE_CLIENT) { /* the host's completed result */
-            int i;
-            sHostWinner = p->gtimer;
-            for (i = 0; i < NET_MAX_PLAYERS; i++) sHostRank[i] = (s32) p->drop_frame[i];
-            memcpy(sHostScores, (u8*) &p->in[0], NMI_SCORES_LEN);
-            sHostResultGot = 1;
-        } else if (p->mode == 3 && rs > 0 && sRole == NET_ROLE_HOST) { /* a client acknowledged */
-            sAckGot |= (u8) (1 << rs);
-        }
+        if (!sRunning || sEnded || rs < 0 || rs >= sPlayers) return;
+        receive_result(p, rs);
         return;
     }
     if (p->type == PKT_INPUT) {
         u32 i;
         static u32 sSeen;
+        if (!sRunning) return;
         slot = p->slot;
         if (slot < 0 || slot >= sPlayers || slot == sSlot) return;
         /* A client takes another player's input only from the host's relay, so
@@ -422,7 +439,7 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
             if (f >= sFrame + RING / 2) continue;     /* too far ahead for the ring */
             store_input(slot, f, &p->in[i]);
         }
-        if (p->check_frame != ~0u) {
+        if (!sResultGot && !(gGamestate == RACING && gRaceState >= RACE_DONE) && p->check_frame != ~0u) {
             const u32 idx = (p->check_frame / CHECK_EVERY) % 16;
             if (sMyCheck[idx].frame == p->check_frame && sMyCheck[idx].sum != p->checksum && sLastReported[slot] != p->check_frame) {
                 sLastReported[slot] = p->check_frame;
@@ -486,7 +503,10 @@ static void session_reset(void) {
     NetInput neutral = { 0, 0, 0, 0 };
     sRunning = 0; sFrame = 0; sDropped = 0; sStalls = 0; sLastStallLog = 0; sStallSlot = -1;
     sModal = MODAL_NONE; sHostFlags = 0; sAppliedPause = 0; sEnded = 0; sDesyncHits = 0;
-    sBarrierActive = 0; sBarrierDone = 0; sAckGot = 0; sHostResultGot = 0;
+    sSessionId = sRaceId = 0;
+    sResultGot = sResultReleased = sResultAllAcked = 0; sResultAck = 0;
+    sSampled = ~0u; sJustSampled = 0; sLastInputSendUs = 0;
+    sStartSaved = 0;
     memset(sHave, 0xFF, sizeof(sHave));
     memset(sKnown, 0, sizeof(sKnown));
     memset(sIds, 0, sizeof(sIds));
@@ -521,23 +541,131 @@ static void fill_sync(NetPkt* p) {
     p->timing = gMenuTimingCounter;
 }
 
-/* mode 1: the host's completed result (winner, finishing order, VS totals).
- * mode 3: a client's acknowledgement that it received and applied it. */
-static void send_barrier(u8 mode) {
-    NetPkt p;
-    memset(&p, 0, sizeof(p));
-    p.type = PKT_RESULT;
+/* Called explicitly by setup_race, including retries of the same course.
+ * A local finish/state correction must never look like a new race. */
+void port_net_race_begin(void) {
+    int i;
+    if (!port_net_active()) return;
+    sRaceId++;
+    sResultGot = sResultReleased = sResultAllAcked = 0;
+    sResultAck = 0;
+    sDesyncHits = 0;
+    gPortNetDesync = 0;
+    for (i = 0; i < 16; i++) sMyCheck[i].frame = ~0u;
+    /* Do not carry a divergent post-race RNG into the next course's setup. */
+    gRandomSeed16 = (u16) fnv(sSessionId, &sRaceId, sizeof(sRaceId));
+    PORT_LOG("net: race %u began\n", (unsigned) sRaceId);
+}
+
+int port_net_result_locked(void) { return port_net_active() && sResultGot; }
+int port_net_results_waiting(void) { return port_net_active() && sRaceId && !sResultReleased; }
+
+static void send_result(u8 mode) {
+    NetPkt p = sResultPkt;
     p.slot = (u8) sSlot;
     p.mode = mode;
-    memcpy(p.ids, sIds, sizeof(sIds));
-    if (mode == 1) {
-        extern s32 gPlayerWinningIndex; extern s32 gGPCurrentRaceRankByPlayerId[]; extern u8* pAppNmiBuffer;
-        int i;
-        p.gtimer = gPlayerWinningIndex;
-        for (i = 0; i < NET_MAX_PLAYERS; i++) p.drop_frame[i] = (u32) gGPCurrentRaceRankByPlayerId[i];
-        memcpy((u8*) &p.in[0], pAppNmiBuffer, NMI_SCORES_LEN); /* the VS win/placement totals */
-    }
     send_pkt(&p);
+}
+
+static void apply_result(void) {
+    const NetRaceResult* r = &sResultPkt.result;
+    int i, count = gModeSelection == GRAND_PRIX ? NUM_PLAYERS : sPlayers;
+    gPlayerWinningIndex = r->winner;
+    gDemoTimer = r->demo_timer;
+    D_80150120 = r->gp_qualified;
+    for (i = 0; i < NUM_PLAYERS; i++) {
+        int rank = r->rank[i];
+        gGPCurrentRaceRankByPlayerId[i] = rank;
+        gGPCurrentRaceRankByPlayerIdDup[i] = rank;
+        gPreviousGPCurrentRaceRankByPlayerId[i] = rank;
+        gPlayers[i].currentRank = rank;
+        gPlayers[i].type = r->player_type[i];
+        if (i < count && rank >= 0 && rank < count) {
+            gGPCurrentRacePlayerIdByRank[rank] = i;
+            gPrevPlayerIdByRank[rank] = i;
+            gPlayerPositionLUT[rank] = i;
+        }
+    }
+    memcpy(pAppNmiBuffer, r->scores, sizeof(r->scores));
+    memcpy(gGPPointsByCharacterId, r->gp_points, sizeof(r->gp_points));
+    gRaceState = RACE_DONE; /* also ends a client that has not finished locally */
+}
+
+static void receive_result(const NetPkt* p, int slot) {
+    if (!sRaceId || p->race != sRaceId) return;
+    if (sRole == NET_ROLE_CLIENT && slot == 0) {
+        if (p->mode == RESULT_ABORT) { modal_open(MODAL_RESULT_FAILED); return; }
+        if (p->mode != RESULT_DATA) return;
+        if (!sResultGot) {
+            /* Structural checks only; local standings/checksums never veto
+             * the host's outcome.  All array indices come from this packet. */
+            int i, seen = 0, count = gModeSelection == GRAND_PRIX ? NUM_PLAYERS : sPlayers;
+            if (p->result.winner < 0 || p->result.winner >= sPlayers || p->result.demo_timer < 0) return;
+            if (gModeSelection != BATTLE) {
+                for (i = 0; i < count; i++) {
+                    int rank = p->result.rank[i];
+                    if (rank < 0 || rank >= count || (seen & (1 << rank))) return;
+                    seen |= 1 << rank;
+                }
+            }
+            sResultPkt = *p;
+            sResultGot = 1;
+            apply_result();
+            PORT_LOG("net: applied host result race %u winner %d, release %u\n", (unsigned) sRaceId, (int) p->result.winner, (unsigned) p->frame);
+        }
+        /* Re-acknowledge retries, including after the countdown has started.
+         * Never reapply a duplicate: GP points may already be counting up. */
+        if (p->frame == sResultPkt.frame) send_result(RESULT_ACK);
+    } else if (sRole == NET_ROLE_HOST && slot > 0 && p->mode == RESULT_ACK && sResultGot && p->frame == sResultPkt.frame) {
+        sResultAck |= (u8) (1 << slot);
+    }
+}
+
+/* Runs before input availability/checksum checks.  Receipt and its ACK must
+ * work even when one machine is waiting for another's gameplay input. */
+static int result_frame_begin(void) {
+    u32 now = now_us();
+    if (sRole == NET_ROLE_HOST && sRaceId && gGamestate == RACING && gRaceState == RACE_DONE && !sResultGot) {
+        int i;
+        memset(&sResultPkt, 0, sizeof(sResultPkt));
+        sResultPkt.type = PKT_RESULT;
+        sResultPkt.race = sRaceId;
+        sResultPkt.frame = sFrame + INPUT_DELAY + 1;
+        sResultPkt.result.winner = gPlayerWinningIndex;
+        sResultPkt.result.demo_timer = gDemoTimer;
+        sResultPkt.result.gp_qualified = D_80150120;
+        for (i = 0; i < NUM_PLAYERS; i++) {
+            sResultPkt.result.rank[i] = gGPCurrentRaceRankByPlayerId[i];
+            sResultPkt.result.player_type[i] = gPlayers[i].type;
+        }
+        memcpy(sResultPkt.result.scores, pAppNmiBuffer, sizeof(sResultPkt.result.scores));
+        memcpy(sResultPkt.result.gp_points, gGPPointsByCharacterId, sizeof(sResultPkt.result.gp_points));
+        sResultGot = 1;
+        sResultSinceUs = now;
+        sResultLastSendUs = now - 50000u;
+        apply_result();
+        PORT_LOG("net: pushing result race %u winner %d, release %u\n", (unsigned) sRaceId, (int) gPlayerWinningIndex, (unsigned) sResultPkt.frame);
+    }
+    if (sRole == NET_ROLE_HOST && sResultGot && !sResultAllAcked) {
+        int s, all = 1;
+        for (s = 1; s < sPlayers; s++) {
+            if (!(sDropped & (1 << s)) && !(sResultAck & (1 << s))) all = 0;
+        }
+        if (all) {
+            sResultAllAcked = 1;
+            PORT_LOG("net: result acknowledged by all\n");
+        } else {
+            if (now - sResultLastSendUs >= 50000u) { send_result(RESULT_DATA); sResultLastSendUs = now; }
+            if (now - sResultSinceUs >= GIVEUP_AFTER_US) {
+                send_result(RESULT_ABORT); send_result(RESULT_ABORT);
+                modal_open(MODAL_RESULT_FAILED);
+                return 1;
+            }
+            return 0;
+        }
+    }
+    if (sResultGot && sFrame >= sResultPkt.frame) sResultReleased = 1;
+    return 1;
 }
 
 static void send_advert(void) {
@@ -561,6 +689,8 @@ static void lobby_transport(int host) {
     session_reset();
     if (host) {
         sRole = NET_ROLE_HOST; sSlot = 0; sPlayers = sCritPlayers;
+        sSessionId = now_us();
+        if (!sSessionId) sSessionId = 1;
         memcpy(sIds[0], net_transport_local_id(), NET_ID_LEN);
         sKnown[0] = 1;
         sLobby = LOBBY_HOSTING;
@@ -837,7 +967,7 @@ static void modal_open(int which) {
     sModalSel = 0;
     if (which == MODAL_HOST_DROP) {
         sHostFlags |= NETIN_PAUSE; /* pauses everyone when that input's frame comes round */
-    } else if (which == MODAL_HOST_GONE || which == MODAL_DROPPED || which == MODAL_DESYNC) {
+    } else if (which == MODAL_HOST_GONE || which == MODAL_DROPPED || which == MODAL_DESYNC || which == MODAL_RESULT_FAILED) {
         sEnded = 1; /* no more lockstep; the view and the pads stay as they were until MAIN MENU */
         net_pause_hard(); /* stop the karts even past the finish line (#4) */
     }
@@ -885,6 +1015,7 @@ void port_net_modal_update(void) {
         case MODAL_HOST_GONE:
         case MODAL_DROPPED:
         case MODAL_DESYNC:
+        case MODAL_RESULT_FAILED:
             if (pressed & (A_BUTTON | START_BUTTON)) { play_sound2(SOUND_MENU_OK_CLICKED); end_session_to_menu(); }
             break;
         default:
@@ -937,6 +1068,11 @@ void port_net_modal_draw(void) {
             modal_line(MD_Y0 + 42, "FROM THE RACE", 0.7f, TEXT_RED);
             modal_item(MD_Y0 + 74, "MAIN MENU", 1);
             break;
+        case MODAL_RESULT_FAILED:
+            modal_line(MD_Y0 + 24, "CONNECTION LOST", 0.7f, TEXT_RED);
+            modal_line(MD_Y0 + 42, "RESULT NOT DELIVERED", 0.65f, TEXT_RED);
+            modal_item(MD_Y0 + 74, "MAIN MENU", 1);
+            break;
         case MODAL_DESYNC:
             modal_line(MD_Y0 + 24, "CONNECTION LOST", 0.7f, TEXT_RED);
             modal_line(MD_Y0 + 42, "RACE OUT OF SYNC", 0.7f, TEXT_RED);
@@ -961,8 +1097,6 @@ int port_net_frame_begin(void) {
     OSContPad pad;
     NetInput in;
     int s;
-    static u32 sSampled = ~0u;
-    static int sJustSampled;
     if (sEnded) { /* the prompt over the frozen race: our pad only, no network */
         if (sSampled != sFrame) {
             sSampled = sFrame;
@@ -995,7 +1129,7 @@ int port_net_frame_begin(void) {
         store_input(sSlot, sFrame + INPUT_DELAY, &in);
         if ((sFrame % 60) == 0) { extern u32 port_log_cost_ms(void); u32 lm = port_log_cost_ms(); PORT_LOG("net: frame %u (%u stalls) %s logms %u\n", (unsigned) sFrame, (unsigned) sStalls, net_transport_stats(), (unsigned) lm); }
     }
-    if ((sFrame % CHECK_EVERY) == 0) {
+    if (!sResultGot && !(gGamestate == RACING && gRaceState >= RACE_DONE) && (sFrame % CHECK_EVERY) == 0) {
         int idx = (sFrame / CHECK_EVERY) % 16;
         sMyCheck[idx].frame = sFrame;
         sMyCheck[idx].sum = state_checksum(sMyCheck[idx].parts);
@@ -1007,11 +1141,12 @@ int port_net_frame_begin(void) {
     /* Send once per new frame; while stalled, resend every 50 ms (loss cover)
      * rather than on every retry -- a flood only slows the peer down. */
     {
-        static u32 sLastSend;
         u32 now = now_us();
-        if (sSampled == sFrame && sJustSampled) { send_inputs(); sLastSend = now; sJustSampled = 0; }
-        else if (now - sLastSend >= 50000) { send_inputs(); sLastSend = now; }
+        if (sSampled == sFrame && sJustSampled) { send_inputs(); sLastInputSendUs = now; sJustSampled = 0; }
+        else if (now - sLastInputSendUs >= 50000) { send_inputs(); sLastInputSendUs = now; }
     }
+    if (!result_frame_begin()) return 0;
+    if (sEnded) return 1; /* result delivery failed: keep the terminal pause */
     for (s = 0; s < sPlayers; s++) {
         if (!have_input(s, sFrame)) {
             u32 now = now_us();
@@ -1038,45 +1173,7 @@ int port_net_frame_begin(void) {
      * a residual nondeterminism would otherwise hand each player a different
      * race and two "winners"), stop cleanly rather than continue.  A couple of
      * confirmations avoids a one-off packet glitch. */
-    if (sDesyncHits >= 3 && sModal == MODAL_NONE) { modal_open(MODAL_DESYNC); return 1; }
-    /* Final-result barrier (host-authoritative).  When the host's race reaches
-     * RACE_DONE it has the final standings; it pushes the completed result
-     * (winner, finishing order, VS totals) and waits for every client to
-     * acknowledge receipt.  A client holds its results screen until the host's
-     * result arrives, applies it wholesale -- regardless of its own checksum or
-     * finish frame -- acknowledges, and continues.  Re-armed every race (#2). */
-    if (sBarrierDone && gRaceState < RACE_HUMAN_FINISHED) { /* a new race began */
-        sBarrierDone = 0; sBarrierActive = 0; sAckGot = 0; sHostResultGot = 0;
-    }
-    if (!sBarrierDone) {
-        u32 nb = now_us();
-        if (sRole == NET_ROLE_HOST) {
-            if (gRaceState >= RACE_DONE) { /* final standings ready */
-                int s2, all = 1;
-                if (!sBarrierActive) { sBarrierActive = 1; sBarrierSinceUs = nb; sBarrierLastSendUs = 0; PORT_LOG("net: pushing result (winner %d)\n", (int) gPlayerWinningIndex); }
-                if (nb - sBarrierLastSendUs >= 50000u) { send_barrier(1); sBarrierLastSendUs = nb; }
-                for (s2 = 1; s2 < sPlayers; s2++) { if (sDropped & (1 << s2)) continue; if (!(sAckGot & (1 << s2))) all = 0; }
-                if (all) { sBarrierDone = 1; PORT_LOG("net: result acknowledged by all\n"); }
-                else if (nb - sBarrierSinceUs >= GIVEUP_AFTER_US) { sBarrierDone = 1; PORT_LOG("net: result ack timeout, proceeding\n"); }
-                else return 0; /* hold the results until every client has it */
-            }
-        } else { /* client */
-            if (gRaceState >= RACE_DONE || sHostResultGot) {
-                if (!sBarrierActive) { sBarrierActive = 1; sBarrierSinceUs = nb; }
-                if (sHostResultGot) {
-                    extern s32 gPlayerWinningIndex; extern s32 gGPCurrentRaceRankByPlayerId[]; extern s16 gPlayerPositionLUT[]; extern u8* pAppNmiBuffer;
-                    int i;
-                    gPlayerWinningIndex = sHostWinner;
-                    for (i = 0; i < NET_MAX_PLAYERS; i++) gGPCurrentRaceRankByPlayerId[i] = sHostRank[i];
-                    for (i = 0; i < NET_MAX_PLAYERS; i++) { int r = sHostRank[i]; if (r >= 0 && r < NET_MAX_PLAYERS) gPlayerPositionLUT[r] = (s16) i; }
-                    memcpy(pAppNmiBuffer, sHostScores, NMI_SCORES_LEN); /* the host's VS totals */
-                    send_barrier(3); send_barrier(3); /* acknowledge (twice, for loss) */
-                    sBarrierDone = 1; PORT_LOG("net: applied host result (winner %d)\n", (int) sHostWinner);
-                } else if (nb - sBarrierSinceUs >= GIVEUP_AFTER_US) { sBarrierDone = 1; PORT_LOG("net: no host result (timeout), local\n"); }
-                else return 0; /* hold the results until the host's result arrives */
-            }
-        }
-    }
+    if (!sResultGot && !(gGamestate == RACING && gRaceState >= RACE_DONE) && sDesyncHits >= 3 && sModal == MODAL_NONE) { modal_open(MODAL_DESYNC); return 1; }
     { /* the host's flags for this frame, applied on every machine at this same frame */
         const NetInput* h = &sRing[0][sFrame & (RING - 1)];
         int pause = (h->flags & NETIN_PAUSE) != 0;

@@ -47,6 +47,12 @@ void port_net_modal_draw(void);
 int port_net_active(void);
 int port_net_players(void);
 int port_net_local_slot(void);
+/* Explicit race lifecycle: reset result identity before initializing a course.
+ * Accepted standings stay locked until the next setup_race.  Hold only the
+ * results countdown while waiting; gameplay frames must keep supplying pads. */
+void port_net_race_begin(void);
+int port_net_result_locked(void);
+int port_net_results_waiting(void);
 /* Once per game iteration, before the game reads the pads: 1 = every slot's
  * input for this frame is here, 0 = stall (call again after a short delay). */
 int port_net_frame_begin(void);

@@ -112,6 +112,48 @@ for the pad.  A machine without a session plays single player as before.
 
 ## Testing in PPSSPP
 
+### Authoritative results
+
+The host sends one immutable result containing the winner, all eight ranks
+(including GP CPUs), VS and Battle totals, and the GP points before the results
+animation. Clients apply that result regardless of their local finishing order.
+Rank updates remain locked until `setup_race` starts the next race. A client
+that has not finished locally enters `RACE_DONE` when the host result arrives.
+
+A client that finishes first holds only the results countdown: game iterations
+and controller sampling continue so the host can still finish. Once finished,
+the host holds network frame F and retries its result every 50 ms until each
+remaining client acknowledges receipt. Clients acknowledge duplicate packets
+without reapplying scores. Results and acknowledgements carry a session ID and
+an explicit race generation, so previous-race packets cannot settle a new race.
+
+Every console starts the results countdown at F + INPUT_DELAY + 1. Clients
+cannot simulate that frame until the host advances after receiving all ACKs,
+because the host has not sampled that frame's input yet. This keeps result
+menus aligned even when the consoles finish at different frames. Result packet
+handling runs before gameplay-input availability checks to avoid deadlocks.
+
+If delivery cannot complete within the transport timeout, the host aborts with
+`CONNECTION LOST / RESULT NOT DELIVERED`; no client falls back to a local result.
+Mid-race checksum diagnostics remain enabled. Finished/post-result simulations
+are excluded from comparison, and each new race seeds its RNG from the common
+session ID and race generation before initialization.
+
+The packet format changed: **all consoles must use the same updated build**.
+Run the host-side regression harness with:
+
+```
+python3 tests/port/test_net_results.py
+```
+
+It runs the production protocol, input rings, relay, result countdown gate and
+rank writers with stubbed driving/UI/platform calls. It covers 2–4 players,
+different finish times, packet loss, stale results/ACKs, immutable retries,
+Battle totals, and consecutive races. Hardware testing is still needed for the
+race-to-results presentation and WLAN behavior.
+
+### Scripted races
+
 Build: `gmake -f Makefile.psp -j8 EXTRA_CFLAGS="-DPORT_INPUT_SCRIPT -DPORT_GFX_DEBUG -DPORT_COURSE_TEST -DPORT_NET -DPORT_NET_FILE"`.
 Two or three game folders, `data/netrole.bin` = 0x12 or 0x13 in the host's,
 2 and 3 in the clients', no `testcourse.bin`.  Start the host instance first.  Both run the input script,

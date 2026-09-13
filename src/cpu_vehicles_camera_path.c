@@ -738,6 +738,9 @@ void set_places(void) {
     s32 playerId;
     s32 rankHigh;
 
+#ifdef PORT_NET
+    if (port_net_result_locked()) return;
+#endif
     switch (gModeSelection) {
         case BATTLE:
         default:
@@ -829,6 +832,9 @@ void update_player_rankings(void) {
     s32 i;
     s32 numRacers;
 
+#ifdef PORT_NET
+    if (port_net_result_locked()) return;
+#endif
     switch (gModeSelection) {
         case BATTLE:
         default:
@@ -881,6 +887,9 @@ void set_places_end_course_with_time(void) {
     s32 j;
     s32 this_loops_upper_bound_is_brough_to_you_by_the_number = 8;
 
+#ifdef PORT_NET
+    if (port_net_result_locked()) return;
+#endif
     for (i = 0; i < this_loops_upper_bound_is_brough_to_you_by_the_number;) {
         gCourseCompletionPercentByRank[i++] = 0.0f;
     }

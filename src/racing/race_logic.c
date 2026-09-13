@@ -1065,6 +1065,11 @@ void func_8028FCBC(void) {
             }
             break;
         case RACE_DONE:
+#ifdef PORT_NET
+            /* Keep exchanging inputs if this console finished before the
+             * host.  Only the results sequence waits for its shared release. */
+            if (port_net_results_waiting()) break;
+#endif
             if (gDemoTimer != 0) {
                 gDemoTimer--;
             } else {
