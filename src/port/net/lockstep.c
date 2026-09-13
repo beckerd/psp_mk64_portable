@@ -98,15 +98,13 @@ static int sModal, sModalSel, sModalSlot, sDesyncHits;
  * screen until every console confirms the same result checksum, so a
  * last-moment disagreement never shows two winners. */
 static int sBarrierActive, sBarrierDone;
-static u32 sBarrierFrame, sBarrierSum;
-static u32 sPeerResultSum[NET_MAX_PLAYERS];
-static u32 sPeerResultFrame[NET_MAX_PLAYERS]; /* the frame each stored result is for (retain early ones) */
-static u8 sPeerResultGot;
 static u32 sBarrierSinceUs, sBarrierLastSendUs;
-static int sHostDecision;        /* client: 1 confirmed, 2 desync (from the host) */
-static u32 sHostDecisionFrame;
-static s32 sDecWinner;            /* the host's authoritative result, adopted for display */
-static s32 sDecRank[NET_MAX_PLAYERS];
+static u8 sAckGot;                /* host: clients that acknowledged the result */
+static int sHostResultGot;        /* client: the host's authoritative result has arrived */
+static s32 sHostWinner;
+static s32 sHostRank[NET_MAX_PLAYERS];
+static u8 sHostScores[24];        /* pAppNmiBuffer[0..22]: the VS win/placement totals */
+#define NMI_SCORES_LEN 23
 static u8 sHostFlags;      /* host: the flags it puts in its outgoing inputs */
 static int sEnded;         /* the session is over but the prompt is still up: local pad, everyone else neutral, full-screen view kept */
 static int sAppliedPause;  /* the host's PAUSE flag as applied on this machine */
@@ -393,17 +391,14 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
     if (p->type == PKT_RESULT) {
         int rs = slot_of(from);
         if (rs < 0 || rs >= sPlayers) return;
-        if (rs == 0 && sRole == NET_ROLE_CLIENT) { /* the host's decision */
-            if (p->mode == 1 || p->mode == 2) {
-                sHostDecision = p->mode; sHostDecisionFrame = p->frame;
-                if (p->mode == 1) { int i; sDecWinner = p->gtimer; for (i = 0; i < NET_MAX_PLAYERS; i++) sDecRank[i] = (s32) p->drop_frame[i]; }
-            }
-            return;
-        }
-        if (sRole == NET_ROLE_HOST && rs > 0 && p->mode == 0) { /* a client's result -- retained by frame */
-            sPeerResultSum[rs] = p->checksum; sPeerResultFrame[rs] = p->frame; sPeerResultGot |= (u8) (1 << rs);
-            /* a client still asking about a frame we already settled: answer it (#1) */
-            if (sBarrierDone && p->frame == sBarrierFrame) { send_barrier(1); }
+        if (p->mode == 1 && rs == 0 && sRole == NET_ROLE_CLIENT) { /* the host's completed result */
+            int i;
+            sHostWinner = p->gtimer;
+            for (i = 0; i < NET_MAX_PLAYERS; i++) sHostRank[i] = (s32) p->drop_frame[i];
+            memcpy(sHostScores, (u8*) &p->in[0], NMI_SCORES_LEN);
+            sHostResultGot = 1;
+        } else if (p->mode == 3 && rs > 0 && sRole == NET_ROLE_HOST) { /* a client acknowledged */
+            sAckGot |= (u8) (1 << rs);
         }
         return;
     }
@@ -491,7 +486,7 @@ static void session_reset(void) {
     NetInput neutral = { 0, 0, 0, 0 };
     sRunning = 0; sFrame = 0; sDropped = 0; sStalls = 0; sLastStallLog = 0; sStallSlot = -1;
     sModal = MODAL_NONE; sHostFlags = 0; sAppliedPause = 0; sEnded = 0; sDesyncHits = 0;
-    sBarrierActive = 0; sBarrierDone = 0; sPeerResultGot = 0; sHostDecision = 0;
+    sBarrierActive = 0; sBarrierDone = 0; sAckGot = 0; sHostResultGot = 0;
     memset(sHave, 0xFF, sizeof(sHave));
     memset(sKnown, 0, sizeof(sKnown));
     memset(sIds, 0, sizeof(sIds));
@@ -526,20 +521,21 @@ static void fill_sync(NetPkt* p) {
     p->timing = gMenuTimingCounter;
 }
 
+/* mode 1: the host's completed result (winner, finishing order, VS totals).
+ * mode 3: a client's acknowledgement that it received and applied it. */
 static void send_barrier(u8 mode) {
     NetPkt p;
     memset(&p, 0, sizeof(p));
     p.type = PKT_RESULT;
     p.slot = (u8) sSlot;
-    p.mode = mode; /* 0 a client's result; 1 confirmed; 2 desync (from the host) */
-    p.frame = sBarrierFrame;
-    p.checksum = sBarrierSum;
+    p.mode = mode;
     memcpy(p.ids, sIds, sizeof(sIds));
-    if (mode == 1) { /* the host's authoritative result travels with the confirmation */
-        extern s32 gPlayerWinningIndex; extern s32 gGPCurrentRaceRankByPlayerId[];
+    if (mode == 1) {
+        extern s32 gPlayerWinningIndex; extern s32 gGPCurrentRaceRankByPlayerId[]; extern u8* pAppNmiBuffer;
         int i;
         p.gtimer = gPlayerWinningIndex;
         for (i = 0; i < NET_MAX_PLAYERS; i++) p.drop_frame[i] = (u32) gGPCurrentRaceRankByPlayerId[i];
+        memcpy((u8*) &p.in[0], pAppNmiBuffer, NMI_SCORES_LEN); /* the VS win/placement totals */
     }
     send_pkt(&p);
 }
@@ -1043,48 +1039,42 @@ int port_net_frame_begin(void) {
      * race and two "winners"), stop cleanly rather than continue.  A couple of
      * confirmations avoids a one-off packet glitch. */
     if (sDesyncHits >= 3 && sModal == MODAL_NONE) { modal_open(MODAL_DESYNC); return 1; }
-    /* Final-result barrier (host-authoritative): once the race is done, hold the
-     * results frame until the host has collected every client's result, compared
-     * them, and broadcast the decision.  Clients need only the host's packet, so
-     * this works in 3-4P where clients do not talk to each other directly (#3).
-     * The barrier is re-armed for every race in a session (#2), and results that
-     * arrive before a side starts its barrier are retained (#1). */
-    if (sBarrierDone && gRaceState < RACE_HUMAN_FINISHED) { /* a new race began: re-arm (#2) */
-        sBarrierDone = 0; sBarrierActive = 0; sPeerResultGot = 0; sHostDecision = 0;
+    /* Final-result barrier (host-authoritative).  When the host's race reaches
+     * RACE_DONE it has the final standings; it pushes the completed result
+     * (winner, finishing order, VS totals) and waits for every client to
+     * acknowledge receipt.  A client holds its results screen until the host's
+     * result arrives, applies it wholesale -- regardless of its own checksum or
+     * finish frame -- acknowledges, and continues.  Re-armed every race (#2). */
+    if (sBarrierDone && gRaceState < RACE_HUMAN_FINISHED) { /* a new race began */
+        sBarrierDone = 0; sBarrierActive = 0; sAckGot = 0; sHostResultGot = 0;
     }
-    if (!sBarrierDone && gRaceState >= RACE_DONE) {
+    if (!sBarrierDone) {
         u32 nb = now_us();
-        if (!sBarrierActive) {
-            u32 parts[4];
-            sBarrierActive = 1; sBarrierFrame = sFrame; sBarrierSum = state_checksum(parts);
-            sBarrierSinceUs = nb; sBarrierLastSendUs = 0;
-            PORT_LOG("net: result barrier at frame %u sum %08X\n", (unsigned) sBarrierFrame, (unsigned) sBarrierSum);
-        }
         if (sRole == NET_ROLE_HOST) {
-            int s2, all = 1, mism = 0;
-            for (s2 = 1; s2 < sPlayers; s2++) {
-                if (sDropped & (1 << s2)) continue;
-                if (!(sPeerResultGot & (1 << s2)) || sPeerResultFrame[s2] != sBarrierFrame) all = 0;
-                else if (sPeerResultSum[s2] != sBarrierSum) mism = 1;
+            if (gRaceState >= RACE_DONE) { /* final standings ready */
+                int s2, all = 1;
+                if (!sBarrierActive) { sBarrierActive = 1; sBarrierSinceUs = nb; sBarrierLastSendUs = 0; PORT_LOG("net: pushing result (winner %d)\n", (int) gPlayerWinningIndex); }
+                if (nb - sBarrierLastSendUs >= 50000u) { send_barrier(1); sBarrierLastSendUs = nb; }
+                for (s2 = 1; s2 < sPlayers; s2++) { if (sDropped & (1 << s2)) continue; if (!(sAckGot & (1 << s2))) all = 0; }
+                if (all) { sBarrierDone = 1; PORT_LOG("net: result acknowledged by all\n"); }
+                else if (nb - sBarrierSinceUs >= GIVEUP_AFTER_US) { sBarrierDone = 1; PORT_LOG("net: result ack timeout, proceeding\n"); }
+                else return 0; /* hold the results until every client has it */
             }
-            if (mism) { PORT_LOG("net: final result disagreement\n"); gPortNetDesync = 1; send_barrier(2); send_barrier(2); modal_open(MODAL_DESYNC); return 1; }
-            if (all) { sBarrierDone = 1; send_barrier(1); send_barrier(1); PORT_LOG("net: final result confirmed (host)\n"); }
-            else if (nb - sBarrierSinceUs >= GIVEUP_AFTER_US) { PORT_LOG("net: final result unconfirmed (timeout)\n"); send_barrier(2); modal_open(MODAL_DESYNC); return 1; }
-            else return 0; /* wait for every client's result */
-        } else { /* client: send our result to the host, wait for the host's decision */
-            if (nb - sBarrierLastSendUs >= 50000u) { send_barrier(0); sBarrierLastSendUs = nb; }
-            if (sHostDecision && sHostDecisionFrame == sBarrierFrame) {
-                if (sHostDecision == 2) { PORT_LOG("net: host says result desync\n"); gPortNetDesync = 1; modal_open(MODAL_DESYNC); return 1; }
-                { /* show the host's result, not our own local calc (guards a hash collision or any post-barrier drift) */
-                    extern s32 gPlayerWinningIndex; extern s32 gGPCurrentRaceRankByPlayerId[]; extern s16 gPlayerPositionLUT[];
+        } else { /* client */
+            if (gRaceState >= RACE_DONE || sHostResultGot) {
+                if (!sBarrierActive) { sBarrierActive = 1; sBarrierSinceUs = nb; }
+                if (sHostResultGot) {
+                    extern s32 gPlayerWinningIndex; extern s32 gGPCurrentRaceRankByPlayerId[]; extern s16 gPlayerPositionLUT[]; extern u8* pAppNmiBuffer;
                     int i;
-                    gPlayerWinningIndex = sDecWinner;
-                    for (i = 0; i < NET_MAX_PLAYERS; i++) gGPCurrentRaceRankByPlayerId[i] = sDecRank[i];
-                    for (i = 0; i < NET_MAX_PLAYERS; i++) { int r = sDecRank[i]; if (r >= 0 && r < NET_MAX_PLAYERS) gPlayerPositionLUT[r] = (s16) i; }
-                }
-                sBarrierDone = 1; PORT_LOG("net: final result confirmed (by host), winner %d\n", (int) sDecWinner);
-            } else if (nb - sBarrierSinceUs >= GIVEUP_AFTER_US) { PORT_LOG("net: result confirm timeout\n"); modal_open(MODAL_DESYNC); return 1; }
-            else return 0; /* hold the results until the host confirms */
+                    gPlayerWinningIndex = sHostWinner;
+                    for (i = 0; i < NET_MAX_PLAYERS; i++) gGPCurrentRaceRankByPlayerId[i] = sHostRank[i];
+                    for (i = 0; i < NET_MAX_PLAYERS; i++) { int r = sHostRank[i]; if (r >= 0 && r < NET_MAX_PLAYERS) gPlayerPositionLUT[r] = (s16) i; }
+                    memcpy(pAppNmiBuffer, sHostScores, NMI_SCORES_LEN); /* the host's VS totals */
+                    send_barrier(3); send_barrier(3); /* acknowledge (twice, for loss) */
+                    sBarrierDone = 1; PORT_LOG("net: applied host result (winner %d)\n", (int) sHostWinner);
+                } else if (nb - sBarrierSinceUs >= GIVEUP_AFTER_US) { sBarrierDone = 1; PORT_LOG("net: no host result (timeout), local\n"); }
+                else return 0; /* hold the results until the host's result arrives */
+            }
         }
     }
     { /* the host's flags for this frame, applied on every machine at this same frame */
