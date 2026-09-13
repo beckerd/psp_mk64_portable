@@ -143,7 +143,18 @@ static u32 state_checksum(u32 parts[4]) {
     h = fnv(h, &gCourseTimer, sizeof(gCourseTimer));
     hp = fnv(2166136261u, &gGamestate, sizeof(gGamestate));
     hp = fnv(hp, &gMenuSelection, sizeof(gMenuSelection));
+    { /* lap counts, ranks and finishing order: the winner is part of the state (#4) */
+        extern s32 gLapCountByPlayerId[]; extern s32 gGPCurrentRaceRankByPlayerId[]; extern s16 gPlayerPositionLUT[];
+        int k;
+        for (k = 0; k < NET_MAX_PLAYERS; k++) {
+            hp = fnv(hp, &gLapCountByPlayerId[k], sizeof(gLapCountByPlayerId[k]));
+            hp = fnv(hp, &gGPCurrentRaceRankByPlayerId[k], sizeof(gGPCurrentRaceRankByPlayerId[k]));
+            hp = fnv(hp, &gPlayerPositionLUT[k], sizeof(gPlayerPositionLUT[k]));
+        }
+        hp = fnv(hp, &gRaceState, sizeof(gRaceState));
+    }
     parts[3] = hp;
+    h = fnv(h, &hp, sizeof(hp)); /* fold the lap/rank/winner state into the master sum */
     h = fnv(h, &gGamestate, sizeof(gGamestate));
     h = fnv(h, &gMenuSelection, sizeof(gMenuSelection));
     h = fnv(h, &gGlobalTimer, sizeof(gGlobalTimer));
@@ -205,15 +216,25 @@ static void send_pkt(NetPkt* p) {
     net_transport_send(p, sizeof(*p));
 }
 
+/* The exact START the host first sent (seed, timers, ids).  A retry must carry
+ * these unchanged: recomputing them after the host has advanced would hand a
+ * late client a different frame-0 state. */
+static NetPkt sStartPkt;
+static int sStartSaved;
 static void send_start(void) {
     NetPkt p;
-    memset(&p, 0, sizeof(p));
-    p.type = PKT_START;
-    p.slot = (u8) sSlot;
-    p.players = (u8) sPlayers;
-    p.delay = INPUT_DELAY;
-    memcpy(p.ids, sIds, sizeof(sIds));
-    fill_drop(&p);
+    if (sStartSaved) {
+        p = sStartPkt;            /* the original sync values */
+        fill_drop(&p);            /* refresh only the drop state */
+    } else {
+        memset(&p, 0, sizeof(p)); /* pre-START safety (should not happen) */
+        p.type = PKT_START;
+        p.slot = (u8) sSlot;
+        p.players = (u8) sPlayers;
+        p.delay = INPUT_DELAY;
+        memcpy(p.ids, sIds, sizeof(sIds));
+        fill_drop(&p);
+    }
     send_pkt(&p);
 }
 
@@ -359,7 +380,12 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
         static u32 sSeen;
         slot = p->slot;
         if (slot < 0 || slot >= sPlayers || slot == sSlot) return;
-        /* the slot's own machine, or the host relaying it */
+        /* A client takes another player's input only from the host's relay, so
+         * every client sees the same inputs in the same order the host does.
+         * Otherwise a client could simulate a peer's frame that the host later
+         * fills with neutral when it declares that peer dropped -> divergence
+         * (#3).  The host itself still takes each client's input directly. */
+        if (sRole == NET_ROLE_CLIENT && slot != 0 && !from_host) return;
         if (memcmp(sIds[slot], from, NET_ID_LEN) != 0 && !from_host) return;
         if (from_host && sRole == NET_ROLE_CLIENT) apply_drops(p);
         if (sSeen++ < 3) PORT_LOG("net: INPUT for slot %d frames %u..%u%s (we are at %u)\n", slot, (unsigned) p->frame, (unsigned) (p->frame + p->count - 1), from_host && slot != 0 ? " (relayed)" : "", (unsigned) sFrame);
@@ -570,9 +596,12 @@ void port_net_lobby_update(void) {
                 NetPkt p;
                 memset(&p, 0, sizeof(p));
                 p.type = PKT_START;
+                p.slot = (u8) sSlot;
                 memcpy(p.ids, sIds, sizeof(sIds));
                 fill_sync(&p);
                 p.delay = INPUT_DELAY;
+                fill_drop(&p);
+                sStartPkt = p; sStartSaved = 1; /* resend this exact packet on a retry (#2) */
                 send_pkt(&p);
                 session_begin();
             }
@@ -735,6 +764,11 @@ void port_net_lobby_draw(void) {
 /* The race's own pause (what START does), when the race allows it; in the
  * menus the overlay freezes them instead (main.c). */
 static int race_can_pause(void) { return gGamestate == RACING && gRaceState < RACE_HUMAN_FINISHED && !gIsInQuitToMenuTransition; }
+/* Freeze gameplay for a terminal network state, whatever the race phase --
+ * the normal pause refuses once a human has finished (#4). */
+static void net_pause_hard(void) {
+    if (gIsGamePaused == 0) { func_8028DF00(); gIsGamePaused = 1; func_800C9F90(1); gPauseTriggered = 1; }
+}
 static void net_pause(int on) {
     if (on && gIsGamePaused == 0 && race_can_pause()) {
         func_8028DF00();
@@ -758,7 +792,7 @@ static void modal_open(int which) {
         sHostFlags |= NETIN_PAUSE; /* pauses everyone when that input's frame comes round */
     } else if (which == MODAL_HOST_GONE || which == MODAL_DROPPED || which == MODAL_DESYNC) {
         sEnded = 1; /* no more lockstep; the view and the pads stay as they were until MAIN MENU */
-        net_pause(1);
+        net_pause_hard(); /* stop the karts even past the finish line (#4) */
     }
     PORT_LOG("net: prompt %d\n", which);
 }

@@ -1,4 +1,9 @@
 #include <ultra64.h>
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#else
+#define port_net_active() 0
+#endif
 #include <macros.h>
 #include <PR/os.h>
 #include <mk64.h>
@@ -47,7 +52,7 @@ void cleanup_red_and_green_shells(struct ShellActor* shell) {
     // try finding the dead green shell
     for (actorIndex = gNumPermanentActors; actorIndex < ACTOR_LIST_SIZE; actorIndex++) {
         compare = (struct ShellActor*) &gActorList[actorIndex];
-        if ((shell != compare) && !(compare->flags & ACTOR_IS_NOT_EXPIRED) && (compare->type == ACTOR_GREEN_SHELL)) {
+        if (!port_net_active() && (shell != compare) && !(compare->flags & ACTOR_IS_NOT_EXPIRED) && (compare->type == ACTOR_GREEN_SHELL)) { /* net: use the deterministic loop below (#1) */
             if (compare->state == MOVING_SHELL) {
                 delete_actor_in_unexpired_actor_list(actorIndex);
             }
@@ -60,7 +65,7 @@ void cleanup_red_and_green_shells(struct ShellActor* shell) {
     // try finding the dead red shell
     for (actorIndex = gNumPermanentActors; actorIndex < ACTOR_LIST_SIZE; actorIndex++) {
         compare = (struct ShellActor*) &gActorList[actorIndex];
-        if ((shell != compare) && !(compare->flags & ACTOR_IS_NOT_EXPIRED) && (compare->type == ACTOR_RED_SHELL)) {
+        if (!port_net_active() && (shell != compare) && !(compare->flags & ACTOR_IS_NOT_EXPIRED) && (compare->type == ACTOR_RED_SHELL)) { /* net: use the deterministic loop below (#1) */
             switch (compare->state) {
                 case MOVING_SHELL:
                 case RED_SHELL_LOCK_ON:
@@ -1315,8 +1320,11 @@ s16 try_remove_destructable_item(Vec3f pos, Vec3s rot, Vec3f velocity, s16 actor
     s32 actorIndex;
     struct ShellActor* compare;
 
-    // try removing a red shell, green shell, banana, or a fake item box if the actor is expired
-    for (actorIndex = gNumPermanentActors; actorIndex < ACTOR_LIST_SIZE; actorIndex++) {
+    // try removing a red shell, green shell, banana, or a fake item box if the actor is expired.
+    // In a net session skip this camera-dependent pass -- "expired" is the
+    // per-screen render flag, so each console would prefer a different actor;
+    // fall through to the deterministic list-order pass below (#1).
+    for (actorIndex = gNumPermanentActors; !port_net_active() && actorIndex < ACTOR_LIST_SIZE; actorIndex++) {
         compare = (struct ShellActor*) &gActorList[actorIndex];
         if (!(compare->flags & ACTOR_IS_NOT_EXPIRED)) {
             switch (compare->type) {
