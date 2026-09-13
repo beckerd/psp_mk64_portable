@@ -92,8 +92,8 @@ static int sLobby, sHaveHost, sJoined; /* client: a matching host was found / it
  * EXIT choice; RESUMING / LEAVING: chosen, waiting for the flag's frame;
  * WAIT_HOST: a joiner while the host decides; HOST_GONE / DROPPED: a joiner
  * with only MAIN MENU left. */
-enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED };
-static int sModal, sModalSel, sModalSlot;
+enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED, MODAL_DESYNC };
+static int sModal, sModalSel, sModalSlot, sDesyncHits;
 static u8 sHostFlags;      /* host: the flags it puts in its outgoing inputs */
 static int sEnded;         /* the session is over but the prompt is still up: local pad, everyone else neutral, full-screen view kept */
 static int sAppliedPause;  /* the host's PAUSE flag as applied on this machine */
@@ -127,6 +127,7 @@ static u32 state_checksum(u32 parts[4]) {
         h = fnv(h, &gPlayers[i].speed, sizeof(gPlayers[i].speed));
         h = fnv(h, gPlayers[i].rotation, sizeof(gPlayers[i].rotation));
     }
+    { extern u8 gBombKarts[]; extern int gBombKartsSize; if (gBombKartsSize) h = fnv(h, gBombKarts, (u32) gBombKartsSize); }
     parts[0] = h;
     hp = fnv(2166136261u, &gRandomSeed16, sizeof(gRandomSeed16));
     parts[1] = hp;
@@ -368,6 +369,7 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
             if (sMyCheck[idx].frame == p->check_frame && sMyCheck[idx].sum != p->checksum && sLastReported[slot] != p->check_frame) {
                 sLastReported[slot] = p->check_frame;
                 gPortNetDesync = 1;
+                sDesyncHits++;
                 PORT_LOG("net: DESYNC at frame %u: ours %08X, slot %d %08X -- differs in:%s%s%s%s\n", (unsigned) p->check_frame, (unsigned) sMyCheck[idx].sum, slot, (unsigned) p->checksum,
                          sMyCheck[idx].parts[0] != p->parts[0] ? " players" : "", sMyCheck[idx].parts[1] != p->parts[1] ? " seed" : "",
                          sMyCheck[idx].parts[2] != p->parts[2] ? " timers" : "", sMyCheck[idx].parts[3] != p->parts[3] ? " gamestate" : "");
@@ -425,7 +427,7 @@ static void session_reset(void) {
     int i, s;
     NetInput neutral = { 0, 0, 0, 0 };
     sRunning = 0; sFrame = 0; sDropped = 0; sStalls = 0; sLastStallLog = 0; sStallSlot = -1;
-    sModal = MODAL_NONE; sHostFlags = 0; sAppliedPause = 0; sEnded = 0;
+    sModal = MODAL_NONE; sHostFlags = 0; sAppliedPause = 0; sEnded = 0; sDesyncHits = 0;
     memset(sHave, 0xFF, sizeof(sHave));
     memset(sKnown, 0, sizeof(sKnown));
     memset(sIds, 0, sizeof(sIds));
@@ -749,7 +751,7 @@ static void modal_open(int which) {
     sModalSel = 0;
     if (which == MODAL_HOST_DROP) {
         sHostFlags |= NETIN_PAUSE; /* pauses everyone when that input's frame comes round */
-    } else if (which == MODAL_HOST_GONE || which == MODAL_DROPPED) {
+    } else if (which == MODAL_HOST_GONE || which == MODAL_DROPPED || which == MODAL_DESYNC) {
         sEnded = 1; /* no more lockstep; the view and the pads stay as they were until MAIN MENU */
         net_pause(1);
     }
@@ -796,6 +798,7 @@ void port_net_modal_update(void) {
             break;
         case MODAL_HOST_GONE:
         case MODAL_DROPPED:
+        case MODAL_DESYNC:
             if (pressed & (A_BUTTON | START_BUTTON)) { play_sound2(SOUND_MENU_OK_CLICKED); end_session_to_menu(); }
             break;
         default:
@@ -846,6 +849,11 @@ void port_net_modal_draw(void) {
         case MODAL_DROPPED:
             modal_line(MD_Y0 + 24, "YOU WERE DROPPED", 0.7f, TEXT_RED);
             modal_line(MD_Y0 + 42, "FROM THE RACE", 0.7f, TEXT_RED);
+            modal_item(MD_Y0 + 74, "MAIN MENU", 1);
+            break;
+        case MODAL_DESYNC:
+            modal_line(MD_Y0 + 24, "CONNECTION LOST", 0.7f, TEXT_RED);
+            modal_line(MD_Y0 + 42, "RACE OUT OF SYNC", 0.7f, TEXT_RED);
             modal_item(MD_Y0 + 74, "MAIN MENU", 1);
             break;
     }
@@ -930,6 +938,11 @@ int port_net_frame_begin(void) {
         }
     }
     sStallSlot = -1;
+    /* Safety net: if the two consoles' checksums disagree (they should not, but
+     * a residual nondeterminism would otherwise hand each player a different
+     * race and two "winners"), stop cleanly rather than continue.  A couple of
+     * confirmations avoids a one-off packet glitch. */
+    if (sDesyncHits >= 3 && sModal == MODAL_NONE) { modal_open(MODAL_DESYNC); return 1; }
     { /* the host's flags for this frame, applied on every machine at this same frame */
         const NetInput* h = &sRing[0][sFrame & (RING - 1)];
         int pause = (h->flags & NETIN_PAUSE) != 0;

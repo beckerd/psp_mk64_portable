@@ -1,23 +1,22 @@
 # Ad hoc test notes (for testers)
 
-## Build 5: one race, both logs (this may already be fixed)
+## Build 6: the desync is fixed (please confirm)
 
-I fixed a bug that could make two consoles drift apart mid-race.  This build
-also records extra detail so that, if it still happens, one race pins down
-the exact cause.
+I found the cause.  In versus races the circling bomb karts were only
+simulated while they were on your screen; each console shows a different
+player, so each froze different bombs, they drifted apart, and a bomb would
+hit one player on one console only -- that is how you both "won".  Now every
+console simulates every bomb.  As a backstop, if the two consoles ever
+disagree again the race stops with "CONNECTION LOST -- RACE OUT OF SYNC"
+instead of running on to two winners.
 
-1. Both PSPs: confirm the EBOOT is this build (MD5 e02b53e953764163f8e4e8be02eff3d0), and reboot both so
-   the logs start clean.
-2. WLAN on.  Set up the SAME 2P VS race, one hosts, one joins.
-3. Race one race to the finish, or until the two screens clearly disagree
-   (a kart driving into walls, both players "winning").  Try to keep other
-   2.4 GHz gear (a PS5 and its controller, Wi-Fi) away, since that causes the
-   lag.
-4. Send back log.txt AND log_prev.txt from BOTH PSPs, and say whether the two
-   screens stayed in agreement or drifted, and roughly when.
+Please confirm:
 
-That is all.  The logs now include "PDUMP" lines; they are for me to compare
-the two consoles and are meant to be large.
+1. Both PSPs on this build (MD5 e6a4422b0e8ce9baf182e5abbf9e4e08), reboot both for clean logs.
+2. A 2P VS race on a course with bombs (Luigi Raceway is a good one), ideally
+   with the two of you driving in different parts of the track.
+3. Does it stay in sync now?  If anything still goes wrong, send log.txt and
+   log_prev.txt from both PSPs.
 
 ---
 

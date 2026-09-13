@@ -119,7 +119,13 @@ void update_bomb_karts(s32 bombKartId) {
         return;
     }
 
-    if (((bombKart->unk_4A != 1) || (gCurrentCourseId == COURSE_AWARD_CEREMONY))) {
+    /* unk_4A is set by the per-camera bomb render (func_80057114): a bomb that
+     * was off-screen for the local player is frozen to save work.  In a net
+     * session each console renders a different player, so a different set of
+     * bombs freezes on each -- the bombs drift apart, a bomb hits one player on
+     * one console only, and the race desyncs.  Simulate every bomb on every
+     * console instead. */
+    if (((bombKart->unk_4A != 1) || (gCurrentCourseId == COURSE_AWARD_CEREMONY) || port_net_active())) {
         var_f22 = bombKart->bombPos[0];
         var_f20 = bombKart->bombPos[1];
         var_f24 = bombKart->bombPos[2];

@@ -1,4 +1,9 @@
 #include <ultra64.h>
+#ifdef PORT_NET
+#include "port/net/port_net.h"
+#else
+#define port_net_active() 0
+#endif
 #include <macros.h>
 #include <defines.h>
 
@@ -147,6 +152,7 @@ VehicleStuff gTankerTruckList[NUM_RACE_TANKER_TRUCKS];
 VehicleStuff gCarList[NUM_RACE_CARS];
 s32 D_80163DD8[4];
 BombKart gBombKarts[NUM_BOMB_KARTS_MAX];
+int gBombKartsSize = (int) sizeof(gBombKarts); /* for the net checksum */
 Collision D_80164038[NUM_BOMB_KARTS_MAX];
 struct unexpiredActors gUnexpiredActorsList[8];
 CpuItemStrategyData cpu_ItemStrategy[NUM_PLAYERS];
