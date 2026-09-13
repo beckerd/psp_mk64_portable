@@ -12,7 +12,7 @@ instead of running on to two winners.
 
 Please confirm:
 
-1. Both PSPs on this build (MD5 e6a4422b0e8ce9baf182e5abbf9e4e08), reboot both for clean logs.
+1. Both PSPs on this build (MD5 4b0bb8591f203073cb96ce84e649c13d), reboot both for clean logs.
 2. A 2P VS race on a course with bombs (Luigi Raceway is a good one), ideally
    with the two of you driving in different parts of the track.
 3. Does it stay in sync now?  If anything still goes wrong, send log.txt and

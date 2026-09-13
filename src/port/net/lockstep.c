@@ -127,7 +127,12 @@ static u32 state_checksum(u32 parts[4]) {
         h = fnv(h, &gPlayers[i].speed, sizeof(gPlayers[i].speed));
         h = fnv(h, gPlayers[i].rotation, sizeof(gPlayers[i].rotation));
     }
-    { extern u8 gBombKarts[]; extern int gBombKartsSize; if (gBombKartsSize) h = fnv(h, gBombKarts, (u32) gBombKartsSize); }
+    { /* bomb-kart sim state (unk_4A visibility flag and padding cleared) */
+        extern int port_bomb_net_state(void* out, int max);
+        static unsigned char bombs[1024] __attribute__((aligned(4)));
+        int nb = port_bomb_net_state(bombs, (int) sizeof(bombs));
+        if (nb > 0) h = fnv(h, bombs, (u32) nb);
+    }
     parts[0] = h;
     hp = fnv(2166136261u, &gRandomSeed16, sizeof(gRandomSeed16));
     parts[1] = hp;

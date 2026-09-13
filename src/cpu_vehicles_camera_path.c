@@ -1,4 +1,5 @@
 #include <ultra64.h>
+#include <string.h>
 #ifdef PORT_NET
 #include "port/net/port_net.h"
 #else
@@ -152,7 +153,21 @@ VehicleStuff gTankerTruckList[NUM_RACE_TANKER_TRUCKS];
 VehicleStuff gCarList[NUM_RACE_CARS];
 s32 D_80163DD8[4];
 BombKart gBombKarts[NUM_BOMB_KARTS_MAX];
-int gBombKartsSize = (int) sizeof(gBombKarts); /* for the net checksum */
+/* The bomb-kart sim state for the net checksum: a copy with the render-only
+ * visibility flag (unk_4A, written per-camera by func_80057114) and the
+ * unknown/padding tail cleared, so two consoles hash identical gameplay
+ * identically.  Hashing the raw struct would false-desync on unk_4A. */
+int port_bomb_net_state(void* out, int max) {
+    int i;
+    if (max < (int) sizeof(gBombKarts)) return 0;
+    memcpy(out, gBombKarts, sizeof(gBombKarts));
+    for (i = 0; i < NUM_BOMB_KARTS_MAX; i++) {
+        BombKart* b = &((BombKart*) out)[i];
+        b->unk_4A = 0;
+        b->unk_4C = 0;
+    }
+    return (int) sizeof(gBombKarts);
+}
 Collision D_80164038[NUM_BOMB_KARTS_MAX];
 struct unexpiredActors gUnexpiredActorsList[8];
 CpuItemStrategyData cpu_ItemStrategy[NUM_PLAYERS];
