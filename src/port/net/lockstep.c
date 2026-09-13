@@ -48,7 +48,7 @@
 #define DROP_AFTER_US (10u * 1000000u)  /* the file mailbox stalls for seconds on its own */
 #define GIVEUP_AFTER_US (15u * 1000000u)
 #endif
-enum { PKT_HELLO = 1, PKT_START = 2, PKT_INPUT = 3, PKT_ADVERT = 4 };
+enum { PKT_HELLO = 1, PKT_START = 2, PKT_INPUT = 3, PKT_ADVERT = 4, PKT_RESULT = 5 };
 
 /* flags travel in the host's inputs only: the frame they apply to is the
  * frame every machine acts on them, so pauses and the end stay in step. */
@@ -94,6 +94,14 @@ static int sLobby, sHaveHost, sJoined; /* client: a matching host was found / it
  * with only MAIN MENU left. */
 enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED, MODAL_DESYNC };
 static int sModal, sModalSel, sModalSlot, sDesyncHits;
+/* Final-result barrier: at the frame the race finishes, hold the results
+ * screen until every console confirms the same result checksum, so a
+ * last-moment disagreement never shows two winners. */
+static int sBarrierActive, sBarrierDone;
+static u32 sBarrierFrame, sBarrierSum;
+static u32 sPeerResultSum[NET_MAX_PLAYERS];
+static u8 sPeerResultGot;
+static u32 sBarrierSinceUs, sBarrierLastSendUs;
 static u8 sHostFlags;      /* host: the flags it puts in its outgoing inputs */
 static int sEnded;         /* the session is over but the prompt is still up: local pad, everyone else neutral, full-screen view kept */
 static int sAppliedPause;  /* the host's PAUSE flag as applied on this machine */
@@ -376,6 +384,15 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
         session_begin();
         return;
     }
+    if (p->type == PKT_RESULT) {
+        int rs;
+        if (!sBarrierActive || p->frame != sBarrierFrame) return; /* only the current barrier */
+        rs = slot_of(from);
+        if (rs > 0 || (rs == 0 && sRole == NET_ROLE_CLIENT)) { /* a peer's result */
+            if (rs >= 0 && rs < sPlayers) { sPeerResultSum[rs] = p->checksum; sPeerResultGot |= (u8) (1 << rs); }
+        }
+        return;
+    }
     if (p->type == PKT_INPUT) {
         u32 i;
         static u32 sSeen;
@@ -460,6 +477,7 @@ static void session_reset(void) {
     NetInput neutral = { 0, 0, 0, 0 };
     sRunning = 0; sFrame = 0; sDropped = 0; sStalls = 0; sLastStallLog = 0; sStallSlot = -1;
     sModal = MODAL_NONE; sHostFlags = 0; sAppliedPause = 0; sEnded = 0; sDesyncHits = 0;
+    sBarrierActive = 0; sBarrierDone = 0; sPeerResultGot = 0;
     memset(sHave, 0xFF, sizeof(sHave));
     memset(sKnown, 0, sizeof(sKnown));
     memset(sIds, 0, sizeof(sIds));
@@ -492,6 +510,17 @@ static void fill_sync(NetPkt* p) {
     p->gtimer = gGlobalTimer;
     p->flash = gCycleFlashMenu;
     p->timing = gMenuTimingCounter;
+}
+
+static void send_result(void) {
+    NetPkt p;
+    memset(&p, 0, sizeof(p));
+    p.type = PKT_RESULT;
+    p.slot = (u8) sSlot;
+    p.frame = sBarrierFrame;
+    p.checksum = sBarrierSum;
+    memcpy(p.ids, sIds, sizeof(sIds));
+    send_pkt(&p);
 }
 
 static void send_advert(void) {
@@ -993,6 +1022,30 @@ int port_net_frame_begin(void) {
      * race and two "winners"), stop cleanly rather than continue.  A couple of
      * confirmations avoids a one-off packet glitch. */
     if (sDesyncHits >= 3 && sModal == MODAL_NONE) { modal_open(MODAL_DESYNC); return 1; }
+    /* Final-result barrier: once the race is done, do not advance the frame
+     * that would show the results until every console has confirmed the same
+     * final checksum.  Both consoles reach this at the same lockstep frame
+     * (gRaceState is part of the synced state), so a match is the norm. */
+    if (!sBarrierDone && gRaceState >= RACE_DONE) {
+        u32 nb = now_us();
+        int s2, all = 1, mism = 0;
+        if (!sBarrierActive) {
+            u32 parts[4];
+            sBarrierActive = 1; sBarrierFrame = sFrame; sBarrierSum = state_checksum(parts);
+            sPeerResultGot = 0; sBarrierSinceUs = nb; sBarrierLastSendUs = 0;
+            PORT_LOG("net: result barrier at frame %u sum %08X\n", (unsigned) sBarrierFrame, (unsigned) sBarrierSum);
+        }
+        if (nb - sBarrierLastSendUs >= 50000u) { send_result(); sBarrierLastSendUs = nb; }
+        for (s2 = 0; s2 < sPlayers; s2++) {
+            if (s2 == sSlot || (sDropped & (1 << s2))) continue;
+            if (!(sPeerResultGot & (1 << s2))) { all = 0; }
+            else if (sPeerResultSum[s2] != sBarrierSum) mism = 1;
+        }
+        if (mism) { PORT_LOG("net: final result disagreement\n"); gPortNetDesync = 1; modal_open(MODAL_DESYNC); return 1; }
+        if (all) { sBarrierDone = 1; PORT_LOG("net: final result confirmed\n"); }
+        else if (nb - sBarrierSinceUs >= GIVEUP_AFTER_US) { PORT_LOG("net: final result unconfirmed (timeout)\n"); modal_open(MODAL_DESYNC); return 1; }
+        else return 0; /* hold the results until confirmed */
+    }
     { /* the host's flags for this frame, applied on every machine at this same frame */
         const NetInput* h = &sRing[0][sFrame & (RING - 1)];
         int pause = (h->flags & NETIN_PAUSE) != 0;
