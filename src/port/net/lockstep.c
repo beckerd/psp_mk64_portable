@@ -105,6 +105,8 @@ static u8 sPeerResultGot;
 static u32 sBarrierSinceUs, sBarrierLastSendUs;
 static int sHostDecision;        /* client: 1 confirmed, 2 desync (from the host) */
 static u32 sHostDecisionFrame;
+static s32 sDecWinner;            /* the host's authoritative result, adopted for display */
+static s32 sDecRank[NET_MAX_PLAYERS];
 static u8 sHostFlags;      /* host: the flags it puts in its outgoing inputs */
 static int sEnded;         /* the session is over but the prompt is still up: local pad, everyone else neutral, full-screen view kept */
 static int sAppliedPause;  /* the host's PAUSE flag as applied on this machine */
@@ -392,7 +394,10 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
         int rs = slot_of(from);
         if (rs < 0 || rs >= sPlayers) return;
         if (rs == 0 && sRole == NET_ROLE_CLIENT) { /* the host's decision */
-            if (p->mode == 1 || p->mode == 2) { sHostDecision = p->mode; sHostDecisionFrame = p->frame; }
+            if (p->mode == 1 || p->mode == 2) {
+                sHostDecision = p->mode; sHostDecisionFrame = p->frame;
+                if (p->mode == 1) { int i; sDecWinner = p->gtimer; for (i = 0; i < NET_MAX_PLAYERS; i++) sDecRank[i] = (s32) p->drop_frame[i]; }
+            }
             return;
         }
         if (sRole == NET_ROLE_HOST && rs > 0 && p->mode == 0) { /* a client's result -- retained by frame */
@@ -530,6 +535,12 @@ static void send_barrier(u8 mode) {
     p.frame = sBarrierFrame;
     p.checksum = sBarrierSum;
     memcpy(p.ids, sIds, sizeof(sIds));
+    if (mode == 1) { /* the host's authoritative result travels with the confirmation */
+        extern s32 gPlayerWinningIndex; extern s32 gGPCurrentRaceRankByPlayerId[];
+        int i;
+        p.gtimer = gPlayerWinningIndex;
+        for (i = 0; i < NET_MAX_PLAYERS; i++) p.drop_frame[i] = (u32) gGPCurrentRaceRankByPlayerId[i];
+    }
     send_pkt(&p);
 }
 
@@ -1064,7 +1075,14 @@ int port_net_frame_begin(void) {
             if (nb - sBarrierLastSendUs >= 50000u) { send_barrier(0); sBarrierLastSendUs = nb; }
             if (sHostDecision && sHostDecisionFrame == sBarrierFrame) {
                 if (sHostDecision == 2) { PORT_LOG("net: host says result desync\n"); gPortNetDesync = 1; modal_open(MODAL_DESYNC); return 1; }
-                sBarrierDone = 1; PORT_LOG("net: final result confirmed (by host)\n");
+                { /* show the host's result, not our own local calc (guards a hash collision or any post-barrier drift) */
+                    extern s32 gPlayerWinningIndex; extern s32 gGPCurrentRaceRankByPlayerId[]; extern s16 gPlayerPositionLUT[];
+                    int i;
+                    gPlayerWinningIndex = sDecWinner;
+                    for (i = 0; i < NET_MAX_PLAYERS; i++) gGPCurrentRaceRankByPlayerId[i] = sDecRank[i];
+                    for (i = 0; i < NET_MAX_PLAYERS; i++) { int r = sDecRank[i]; if (r >= 0 && r < NET_MAX_PLAYERS) gPlayerPositionLUT[r] = (s16) i; }
+                }
+                sBarrierDone = 1; PORT_LOG("net: final result confirmed (by host), winner %d\n", (int) sDecWinner);
             } else if (nb - sBarrierSinceUs >= GIVEUP_AFTER_US) { PORT_LOG("net: result confirm timeout\n"); modal_open(MODAL_DESYNC); return 1; }
             else return 0; /* hold the results until the host confirms */
         }
