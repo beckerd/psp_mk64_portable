@@ -1295,9 +1295,8 @@ void main_menu_act(struct Controller* controller, u16 controllerIdx) {
                 break;
             case MAIN_MENU_PLAYER_SELECT:
 #ifdef PORT_NET
-                if (port_net_active()) {
-                    gPlayerCount = port_net_players(); // one pad per machine: the session decides
-                    btnAndStick &= ~(R_JPAD | L_JPAD);
+                if (port_net_active() && controllerIdx != PLAYER_ONE) {
+                    btnAndStick &= ~(R_JPAD | L_JPAD); // ad hoc: only the host leaves the session's player count
                 }
 #endif
                 if ((btnAndStick & R_JPAD) && (gPlayerCount < 4)) {
@@ -1485,7 +1484,25 @@ void main_menu_act(struct Controller* controller, u16 controllerIdx) {
                 }
                 if (btnAndStick & A_BUTTON) {
 #ifdef PORT_NET
-                    if (gPlayerCount >= 2 && !port_net_active()) {
+                    if (port_net_lobby_active() || port_net_modal_active()) {
+                        break; // an earlier pad's OK this frame already opened one
+                    }
+                    if (port_net_active() && gPlayerCount != port_net_players()) {
+                        /* Another number of players ends the session, on every
+                         * machine in this lockstep frame (docs/adhoc.md). */
+                        if (controllerIdx != PLAYER_ONE) {
+                            break; // the host's call
+                        }
+                        if (!port_net_end_for_new_race()) {
+                            play_sound2(SOUND_MENU_GO_BACK);
+                            break; // joiner: "HOST DISCONNECTED" over the game select
+                        }
+                        if (gPlayerCount >= 2) {
+                            play_sound2(SOUND_MENU_OK_CLICKED);
+                            port_net_lobby_host(); // the host's new race: "WAITING FOR N MORE PLAYERS"
+                            break;
+                        }
+                    } else if (gPlayerCount >= 2 && !port_net_active()) {
                         play_sound2(SOUND_MENU_OK_CLICKED);
                         port_net_lobby_open(); // ad hoc: HOST / JOIN; the transition follows when the race is full
                         break;
@@ -1889,6 +1906,11 @@ void load_menu_states(s32 menuSelection) {
                     gMainMenuSelection = MAIN_MENU_PLAYER_SELECT;
                     play_sequence(SEQ_MENU_MAIN_MENU);
                     gPlayerCount = 1;
+#ifdef PORT_NET
+                    if (port_net_active()) {
+                        gPlayerCount = port_net_players(); // ad hoc: back from a race, the session's count is the default
+                    }
+#endif
                     if (gScreenModeSelection >= NUM_SCREEN_MODES || gScreenModeSelection < 0) {
                         gScreenModeSelection = SCREEN_MODE_1P;
                     }

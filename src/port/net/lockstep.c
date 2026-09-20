@@ -106,8 +106,9 @@ static int sLobby, sHaveHost, sJoined; /* client: a matching host was found / it
  * EXIT choice; RESUMING / LEAVING: chosen, waiting for the flag's frame;
  * WAIT_HOST: a joiner while the host decides; HOST_GONE / DROPPED: a joiner
  * with only MAIN MENU left. */
-enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED, MODAL_DESYNC, MODAL_RESULT_FAILED };
+enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED, MODAL_DESYNC, MODAL_RESULT_FAILED, MODAL_HOST_LEFT };
 static int sModal, sModalSel, sModalSlot, sDesyncHits;
+static int sModalArmed; /* HOST_LEFT: the button went down, close on its release */
 /* The host freezes one result and waits for receipt, never agreement.  It
  * holds frame F while clients can reach at most F + INPUT_DELAY + 1.  Starting
  * the results countdown at that shared frame cannot race a delayed packet:
@@ -125,6 +126,7 @@ static int sAppliedPause;  /* the host's PAUSE flag as applied on this machine *
 static u16 sModalPrevButtons;
 static void modal_open(int which);
 static void end_session_to_menu(void);
+static void transport_down(void);
 static u32 sLastHelloUs;
 enum { LOBBY_NONE, LOBBY_CHOICE, LOBBY_CONNECT_HOST, LOBBY_CONNECT_JOIN, LOBBY_HOSTING, LOBBY_SEARCHING, LOBBY_ERROR };
 static int criteria_match(const struct NetPktTag* p);
@@ -677,6 +679,13 @@ static void send_advert(void) {
     send_pkt(&p);
 }
 
+/* The transport is taken down where the session ends, which can be before the
+ * prompt that reports it is dismissed: never twice. */
+static int sTransportUp;
+static void transport_down(void) {
+    if (sTransportUp) { net_transport_term(); sTransportUp = 0; }
+}
+
 static void lobby_transport(int host) {
     sCancelSel = 1; /* the waiting screens: CANCEL is the only line, selected by default */
     if (!net_transport_init(host ? NET_ROLE_HOST : NET_ROLE_CLIENT, "MK64")) {
@@ -685,6 +694,7 @@ static void lobby_transport(int host) {
         sLobby = LOBBY_ERROR;
         return;
     }
+    sTransportUp = 1;
     sCancelSel = 1;
     session_reset();
     if (host) {
@@ -702,9 +712,8 @@ static void lobby_transport(int host) {
 }
 
 static void lobby_cancel(void) {
-    if (sLobby == LOBBY_HOSTING || sLobby == LOBBY_SEARCHING || sLobby == LOBBY_ERROR) {
-        net_transport_term();
-    }
+    if (sLobby == LOBBY_ERROR) net_transport_term(); /* a failed init: nothing is marked up */
+    transport_down();
     sRole = NET_ROLE_NONE;
     session_reset();
     sLobby = LOBBY_NONE;
@@ -726,6 +735,14 @@ void port_net_lobby_open(void) {
     sCancelSel = 0;
     sLobby = LOBBY_CHOICE;
     PORT_LOG("net: lobby: %d players, mode %d, class %d%s\n", sCritPlayers, sCritMode, sCritCc, sAuto == 1 ? " (auto host)" : sAuto == 2 ? " (auto join)" : "");
+}
+
+/* The host left a session to set up another race (port_net_end_for_new_race):
+ * it has said what it wants, so no HOST / JOIN choice. */
+void port_net_lobby_host(void) {
+    port_net_lobby_open();
+    sAuto = 0;
+    sLobby = LOBBY_CONNECT_HOST;
 }
 
 int port_net_lobby_active(void) { return sLobby != LOBBY_NONE; }
@@ -970,17 +987,42 @@ static void modal_open(int which) {
     } else if (which == MODAL_HOST_GONE || which == MODAL_DROPPED || which == MODAL_DESYNC || which == MODAL_RESULT_FAILED) {
         sEnded = 1; /* no more lockstep; the view and the pads stay as they were until MAIN MENU */
         net_pause_hard(); /* stop the karts even past the finish line (#4) */
+    } else if (which == MODAL_HOST_LEFT) {
+        sEnded = 1; /* over the game select: nothing to pause */
+        sModalArmed = 0;
     }
     PORT_LOG("net: prompt %d\n", which);
 }
 
 /* Leave the session and go to the main menu (the pause menu's QUIT path in
  * the race; its own transition in the menus). */
-static void end_session_to_menu(void) {
+static void session_close(void) {
     sModal = MODAL_NONE;
     sRunning = 0;
     sRole = NET_ROLE_NONE;
-    net_transport_term();
+    sEnded = 0;
+    transport_down();
+}
+
+/* Game select, in a session: the host confirmed a race for another number of
+ * players (menus.c).  This runs inside the same lockstep frame on every
+ * machine, so no packet is needed and none can be lost.  The host is out and
+ * goes on to set up its new race (returns 1); a joiner drops the WLAN and gets
+ * "HOST DISCONNECTED" over the game select, which keeps the host's picks so
+ * OK / JOIN finds the new race (returns 0). */
+int port_net_end_for_new_race(void) {
+    PORT_LOG("net: the host set up a %d-player race at frame %u: the %d-player session ends\n", (int) gPlayerCount, (unsigned) sFrame, sPlayers);
+    if (sRole == NET_ROLE_HOST) {
+        session_close();
+        return 1;
+    }
+    transport_down();
+    modal_open(MODAL_HOST_LEFT);
+    return 0;
+}
+
+static void end_session_to_menu(void) {
+    session_close();
     if (gGamestate == RACING) {
         gIsGamePaused = 0;
         func_80290338();
@@ -1017,6 +1059,12 @@ void port_net_modal_update(void) {
         case MODAL_DESYNC:
         case MODAL_RESULT_FAILED:
             if (pressed & (A_BUTTON | START_BUTTON)) { play_sound2(SOUND_MENU_OK_CLICKED); end_session_to_menu(); }
+            break;
+        case MODAL_HOST_LEFT:
+            /* Close on the release: our pad becomes pad 1 again with the
+             * session gone, and a button still down would be the menu's OK. */
+            if (pressed & (A_BUTTON | START_BUTTON)) { play_sound2(SOUND_MENU_OK_CLICKED); sModalArmed = 1; }
+            if (sModalArmed && !(pad.button & (A_BUTTON | START_BUTTON))) session_close();
             break;
         default:
             break;
@@ -1062,6 +1110,10 @@ void port_net_modal_draw(void) {
         case MODAL_HOST_GONE:
             modal_line(MD_Y0 + 30, "HOST EXITED THE GAME", 0.7f, TEXT_RED);
             modal_item(MD_Y0 + 74, "MAIN MENU", 1);
+            break;
+        case MODAL_HOST_LEFT:
+            modal_line(MD_Y0 + 30, "HOST DISCONNECTED", 0.7f, TEXT_RED);
+            modal_item(MD_Y0 + 74, "OK", 1);
             break;
         case MODAL_DROPPED:
             modal_line(MD_Y0 + 24, "YOU WERE DROPPED", 0.7f, TEXT_RED);

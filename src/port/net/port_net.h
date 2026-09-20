@@ -35,6 +35,12 @@ int port_net_boot(void); /* nothing now: the session starts from the game select
 /* The lobby (lockstep.c): opened by the game-select OK press for 2-4 players;
  * while it is active the menu is frozen (main.c), updated and drawn by these. */
 void port_net_lobby_open(void);
+void port_net_lobby_host(void); /* straight to hosting, no HOST / JOIN choice */
+/* Game select, in a session, the host's OK on another number of players: the
+ * session ends on every machine in that lockstep frame.  1 = this machine is
+ * the host and goes on to its new race, 0 = a joiner, now under the "HOST
+ * DISCONNECTED" prompt. */
+int port_net_end_for_new_race(void);
 int port_net_lobby_active(void);
 void port_net_lobby_update(void);
 void port_net_lobby_draw(void);

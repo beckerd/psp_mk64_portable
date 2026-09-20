@@ -160,6 +160,39 @@ Two or three game folders, `data/netrole.bin` = 0x12 or 0x13 in the host's,
 which picks 2P GAME; the client's script becomes pad 2.  The mailbox files
 live in `ms0:/mk64net/` (the emulator's memory stick directory).
 
+## Leaving a race: the pause menu and the game select
+
+The pause menu is the game's own and runs in lockstep like everything else, so
+CONTINUE, COURSE CHANGE, DRIVER CHANGE and QUIT take every machine to the same
+screen in the same frame, still in the session.  QUIT lands on the game select
+with the session's number of players preselected; confirming that number (any
+mode, any class) is a rematch with the same group and opens no lobby.
+
+**Another number of players ends the session.**  In a session only the host's
+pad moves the 1P/2P/3P/4P cursor, and only the host's OK counts while the
+number differs from the session's.  That OK is a lockstep input, so every
+machine sees it in the same frame and ends the session there
+(`port_net_end_for_new_race()`): no packet is involved and none can be lost.
+
+- The host takes the WLAN down and goes on with what it picked: 1P starts the
+  single-player game; 2P-4P goes straight to hosting the new race ("WAITING
+  FOR N PLAYERS", no HOST / JOIN choice -- it has said what it wants), which
+  brings the WLAN up again under a new session id.
+- Each joiner takes the WLAN down and shows "HOST DISCONNECTED" -- OK over the
+  game select.  The menu under it still holds the host's picks (players, mode,
+  class: they were made in lockstep), so after OK the joiner's own OK press
+  opens HOST / JOIN with the matching race already set up, and JOIN finds the
+  host's new lobby.
+
+Scripted test: add `-DPORT_NET_RECOUNT_TEST` to the scripted-race build below.
+The host backs out of the 2P character select, picks 3P VS and confirms; the
+joiner dismisses the prompt and joins.  Expect on both machines `net: the host
+set up a 3-player race at frame N` with the same N, then `lobby -> hosting` /
+`joined the race`; `shot7000` (joiner) is the prompt, `shot7100` the new lobby.
+
+Not there yet: a joiner cannot leave a session on its own short of HOME (the
+host then sees the drop-out prompt after DROP_AFTER_US).
+
 ## Drop-outs
 
 The host alone declares a drop: a slot whose input it has waited
