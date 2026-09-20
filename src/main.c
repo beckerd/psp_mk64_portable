@@ -1489,28 +1489,42 @@ static void port_split_stats(void) {
             }
         }
     }
-    /* Hardware cost breakdown: with an empty data/exp file, a race cycles
-     * through renderer experiments five seconds at a time and logs the busy
-     * time of each -- what is left when a stage is switched off is what the
-     * others cost.  The picture is wrong while it runs. */
+    /* Hardware cost breakdown: with an empty data/exp file, a race rotates
+     * through six renderer experiments ONE SECOND at a time and adds each
+     * one's busy time up over the whole run, logging the six averages every 30
+     * seconds.  (Five-second windows compared different stretches of track:
+     * the scene changed more than the stages cost.)  The first 12 pictures
+     * after a switch are left out: caches refill.  What is left when a stage
+     * is switched off is what the others cost.  The picture is wrong while it
+     * runs. */
     {
         extern s32 gPortExpMode;
         static s32 sExpOn = -1;
-        static u32 sExpN, sExpBusy, sExpLate;
+        static u32 sExpPic, sExpTotal, sExpSum[6], sExpN[6], sExpLate[6];
         if (sExpOn < 0) {
             FILE* f = fopen(port_save_path("exp"), "rb");
             sExpOn = f != NULL;
             if (f != NULL) fclose(f);
         }
         if (sExpOn && gRaceState >= RACE_IN_PROGRESS) {
-            sExpN++;
-            sExpBusy += gPortLastFrameBusyUs;
-            if (gPortLastFrameVblanks > 1) sExpLate++;
-            if (sExpN == 300) {
-                static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports" };
-                PORT_LOG("exp %d (%s): busy %u us avg per picture, %u of 300 late\n", (int) gPortExpMode, names[gPortExpMode], (unsigned) (sExpBusy / 300), (unsigned) sExpLate);
+            if (sExpPic >= 12) {
+                sExpSum[gPortExpMode] += gPortLastFrameBusyUs;
+                sExpN[gPortExpMode]++;
+                if (gPortLastFrameVblanks > 1) sExpLate[gPortExpMode]++;
+            }
+            if (++sExpPic == 60) {
+                sExpPic = 0;
                 gPortExpMode = (gPortExpMode + 1) % 6;
-                sExpN = sExpBusy = sExpLate = 0;
+            }
+            if (++sExpTotal == 1800) {
+                static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports (and so no texture changes)" };
+                s32 m;
+                for (m = 0; m < 6; m++) {
+                    PORT_LOG("exp %d (%s): busy %u us avg per picture over %u pictures, %u late\n", (int) m, names[m],
+                             (unsigned) (sExpN[m] ? sExpSum[m] / sExpN[m] : 0), (unsigned) sExpN[m], (unsigned) sExpLate[m]);
+                    sExpSum[m] = sExpN[m] = sExpLate[m] = 0;
+                }
+                sExpTotal = 0;
             }
         } else {
             gPortExpMode = 0;
