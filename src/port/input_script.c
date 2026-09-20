@@ -61,6 +61,18 @@ static const ScriptStep sSteps[] = {
     TAP(1120, A_BUTTON), // OK: another number of players
     { 640, 1000000, 0, 0, 0 },
 #endif
+#if defined(PORT_NET) && defined(PORT_NET_LEAVE_TEST)
+    /* docs/adhoc.md "LEAVE MULTIPLAYER": PORT_NET_LEAVE_TEST=1 the joiner, =2
+     * the host pauses the 2P GP race (the START below; the other machine's is
+     * masked), goes down to the third line and confirms.  shot1650 is the
+     * pause menu, shot1800 the prompt on the machine left behind, whose A at
+     * 1900 picks CONTINUE (after the joiner left) / MAIN MENU (the host). */
+    TAP(1600, D_JPAD),
+    TAP(1630, D_JPAD),
+    TAP(1670, A_BUTTON),
+    TAP(1900, A_BUTTON),
+    { 1566, 1000000, 0, 0, 0 },
+#endif
 #ifndef PORT_STRAIGHT_RACE
     TAP(1560, START_BUTTON), // pause mid-race (first so it wins over the held-A steps); shot1590/1620 show the pause screen
     { 1566, 1640, 0, 0, 0 }, // ...and release everything: a new A press would pick "CONTINUE GAME"
@@ -191,6 +203,14 @@ void port_input_script(OSContPad* pad) {
     if (port_net_active() && port_net_local_slot() != 0) {
         pad->button &= ~(R_JPAD | L_JPAD);
     }
+#ifdef PORT_NET_LEAVE_TEST
+    {
+        static int sSlot = -1;
+        if (port_net_active()) sSlot = port_net_local_slot();
+        if (sSlot != (PORT_NET_LEAVE_TEST == 1 ? 1 : 0) && sFrame < 1700) pad->button &= ~START_BUTTON; /* the leaver pauses */
+        if (sFrame > 1680 && sFrame < 1900 && (sFrame % 20) == 0 && (sFrame % SHOT_EVERY) != 0) { /* two dumps in one frame: the second is black */ port_screenshot((int) sFrame); PORT_LOG("script f%u: shot, gamestate %d paused %d modal %d\n", sFrame, gGamestate, gIsGamePaused, port_net_modal_active()); }
+    }
+#endif
 #endif
 
 #ifdef PORT_STRAIGHT_RACE
