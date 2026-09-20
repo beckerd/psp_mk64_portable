@@ -1501,7 +1501,15 @@ static void port_split_stats(void) {
     {
         extern s32 gPortExpMode;
         static s32 sExpOn = -1;
-        static u32 sExpPic, sExpTotal, sExpSum[6], sExpN[6], sExpLate[6];
+        static u32 sExpPic, sExpTotal, sExpSum[7], sExpN[7], sExpLate[7];
+        extern int gExpDirectEmitOff;
+        static s32 sNoDirect = -1;
+        if (sNoDirect < 0) { /* data/nodirect: batches go through the staging copy again (if direct emit misbehaves on hardware) */
+            FILE* nf = fopen(port_save_path("nodirect"), "rb");
+            sNoDirect = nf != NULL;
+            if (nf != NULL) fclose(nf);
+            if (sNoDirect) PORT_LOG("gfx: direct vertex emit off (data/nodirect)\n");
+        }
         if (sExpOn < 0) {
             FILE* f = fopen(port_save_path("exp"), "rb");
             sExpOn = f != NULL;
@@ -1516,13 +1524,13 @@ static void port_split_stats(void) {
             }
             if (++sExpPic == 60) {
                 sExpPic = 0;
-                gPortExpMode = (gPortExpMode + 1) % 6;
+                gPortExpMode = (gPortExpMode + 1) % 7;
             }
             sPortSplitHoldoff = 0; /* the measurement needs 60 fps pictures: no 30 fps fallback while it runs */
-            if (++sExpTotal == 900) { /* every 15 s of pictures */
-                static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports (and so no texture changes)" };
+            if (++sExpTotal == 1260) { /* every 21 s of pictures: three turns of the seven modes */
+                static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports (and so no texture changes)", "everything, batches through the staging copy" };
                 s32 m;
-                for (m = 0; m < 6; m++) {
+                for (m = 0; m < 7; m++) {
                     PORT_LOG("exp %d (%s): busy %u us avg per picture over %u pictures, %u late\n", (int) m, names[m],
                              (unsigned) (sExpN[m] ? sExpSum[m] / sExpN[m] : 0), (unsigned) sExpN[m], (unsigned) sExpLate[m]);
                     sExpSum[m] = sExpN[m] = sExpLate[m] = 0;
@@ -1532,6 +1540,7 @@ static void port_split_stats(void) {
         } else {
             gPortExpMode = 0;
         }
+        gExpDirectEmitOff = sNoDirect || gPortExpMode == 6;
     }
     if (sHalves == 120) {
         if (sMissed > 14 && !sExpRunning) { /* over an eighth late: the game would run visibly slow */

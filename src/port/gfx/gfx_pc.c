@@ -253,7 +253,14 @@ typedef struct psp_fast_t {
   struct RGBA color;
   float x,y,z;
 } psp_fast_t;
-static psp_fast_t buf_vbo[MAX_BUFFERED  * 3] __attribute__ ((aligned (32))); // 3 vertices in a triangle and 26 floats per vtx
+/* A batch's vertices go straight into GE list memory when the backend can give
+ * some (gfx_scegu_batch_begin): through the cache, written back in one block
+ * at the flush.  The staging array is the fallback; copying 72 bytes a
+ * triangle from it into the uncached list, word by word, was most of the
+ * emit + draw cost measured on hardware. */
+static psp_fast_t buf_vbo_static[MAX_BUFFERED  * 3] __attribute__ ((aligned (64))); // 3 vertices in a triangle
+static psp_fast_t *buf_vbo = buf_vbo_static;
+extern void *gfx_scegu_batch_begin(unsigned int max_bytes);
 #else
 static float buf_vbo[MAX_BUFFERED * (26 * 3)] // 3 vertices in a triangle and 26 floats per vtx
 #endif
@@ -1414,9 +1421,13 @@ static void gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
             float wx = rsp.P_matrix[0][3], wy = rsp.P_matrix[1][3], wz = rsp.P_matrix[2][3];
             rsp.is_persp = (wx * wx + wy * wy + wz * wz) > 0.01f;
         }
-        /* Allocate space in DL for current proj matrix */
+#ifndef PORT_GE_TL
+        /* Allocate space in DL for current proj matrix (GE_TL pushes MP at the
+         * flush instead: this was 80 list bytes and an uncached copy per load,
+         * written while a batch could still be open) */
         void *matrix_inline = (void *)ALIGN((unsigned int)sceGuGetMemory(sizeof(rsp.P_matrix)+15), 16);
         memcpy(matrix_inline, rsp.P_matrix, sizeof(rsp.P_matrix));
+#endif
 #if defined(PORT_GE_TL) && defined(PORT_GE_TL_ASPECT)
         {
             float k = (4.0f / 3.0f) / ((float) gfx_current_dimensions.width / (float) gfx_current_dimensions.height);
@@ -1425,7 +1436,6 @@ static void gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
         }
 #endif
 #ifdef PORT_GE_TL
-        (void) matrix_inline;
         gfx_flush(); // triangles buffered so far belong to the previous matrix
 #else
         gfx_flush(); // triangles buffered so far belong to the previous matrix
@@ -2108,8 +2118,14 @@ static void gfx_tri_rebuild_state(struct LoadedVertex *v1) {
 
 
 /* Emit one vertex of the current triangle into the GE buffer. */
+int gExpDirectEmitOff; /* data/exp mode 6: the old staging-buffer copy, for comparison */
 static inline void gfx_emit_vertex(const struct LoadedVertex *cv, uint32_t cc_id, int lod) {
-    psp_fast_t *out = &buf_vbo[buf_num_vert];
+    psp_fast_t *out;
+    if (buf_num_vert == 0) { /* a new batch */
+        void *direct = gExpDirectEmitOff ? NULL : gfx_scegu_batch_begin(sizeof(buf_vbo_static));
+        buf_vbo = direct != NULL ? (psp_fast_t *) direct : buf_vbo_static;
+    }
+    out = &buf_vbo[buf_num_vert];
     out->x = cv->x; // view space: the GE applies only the projection
     out->y = cv->y;
     out->z = cv->z;
@@ -2639,6 +2655,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
 
 /* This will be going away possibly, it all depends on how we end up treating hw sprites */
 static void gfx_sp_tri1_2d(uint8_t vtx1_idx, uint8_t vtx2_idx, UNUSED uint8_t vtx3_idx) {
+    gfx_flush(); /* an open 3D batch sits in list memory just past the write pointer: nothing may write GE commands before it is drawn */
     struct VertexColor *v1 = &rsp.loaded_vertices_2D[vtx1_idx];
     struct VertexColor *v2 = &rsp.loaded_vertices_2D[vtx2_idx];
     struct VertexColor *v_arr[2] = {v1, v2};

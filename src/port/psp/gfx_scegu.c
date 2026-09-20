@@ -739,6 +739,26 @@ static inline void gfx_scegu_blend_fog_tris(void) {
 }
 
 extern void memcpy_vfpu(void *dst, const void *src, size_t size);
+/* Direct vertex emit (gfx_pc.c buf_vbo): a batch is written straight into the
+ * list, BATCH_HEADROOM bytes past the list's write position -- room for the
+ * commands the flush issues before the draw (the projection matrix) -- and
+ * aligned to a cache line, so the block the CPU writes back holds nothing the
+ * list code writes through the uncached alias.  Nothing else writes GE
+ * commands while a batch is open: every state change flushes first. */
+#define BATCH_HEADROOM 512u
+static void *batch_ptr;
+static unsigned int batch_misses;
+void *gfx_scegu_batch_begin(unsigned int max_bytes) {
+    unsigned int cur = ((unsigned int) sceGuGetMemory(0)) & ~0x40000000u;
+    unsigned int start = (cur + 8u + BATCH_HEADROOM + 63u) & ~63u;
+    if (start + max_bytes + 4096u > (unsigned int) list + GU_LIST_BYTES) {
+        batch_ptr = NULL; /* too near the end of the list: the staging path, and gfx_flush recycles */
+        return NULL;
+    }
+    batch_ptr = (void *) start;
+    return batch_ptr;
+}
+
 static void gfx_scegu_draw_triangles(float buf_vbo[], UNUSED size_t buf_vbo_len, size_t buf_vbo_num_tris) {
     if (gfx_debug_frame) {
         const Vertex* v = (const Vertex*) buf_vbo;
@@ -775,9 +795,31 @@ static void gfx_scegu_draw_triangles(float buf_vbo[], UNUSED size_t buf_vbo_len,
         batch++;
     }}
 #endif
-    void *buf = sceGuGetMemory(sizeof(Vertex) * 3 * buf_vbo_num_tris);
-    memcpy(buf, buf_vbo, sizeof(Vertex) * 3 * buf_vbo_num_tris);
-    sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, 3 * buf_vbo_num_tris, 0, buf);
+    {
+        unsigned int nbytes = sizeof(Vertex) * 3 * buf_vbo_num_tris;
+        void *buf = NULL;
+        if ((void *) buf_vbo == batch_ptr && batch_ptr != NULL) {
+            /* The vertices are already in list memory (gfx_scegu_batch_begin),
+             * in whole cache lines of their own.  Put them in RAM, then move
+             * the list's write pointer past them: sceGuGetMemory(n) returns
+             * its current position + 8 and continues n bytes after that. */
+            unsigned int end = ((unsigned int) batch_ptr + nbytes + 63u) & ~63u;
+            unsigned int cur = ((unsigned int) sceGuGetMemory(0)) & ~0x40000000u; /* where the list is now */
+            if (cur + 8u <= (unsigned int) batch_ptr && (unsigned int) batch_ptr - cur <= BATCH_HEADROOM + 128u) {
+                sceKernelDcacheWritebackInvalidateRange(batch_ptr, end - (unsigned int) batch_ptr);
+                sceGuGetMemory((int) (end - (cur + 8u)));
+                buf = batch_ptr;
+            } else {
+                batch_misses++; /* the list moved (recycled, or more commands than the headroom): copy */
+            }
+        }
+        if (buf == NULL) {
+            buf = sceGuGetMemory(nbytes);
+            memcpy(buf, buf_vbo, nbytes);
+        }
+        batch_ptr = NULL;
+        sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, 3 * buf_vbo_num_tris, 0, buf);
+    }
 
     // cur_fog_ofs is only set if GL_EXT_fog_coord isn't used
     // if (cur_fog_ofs) gfx_scegu_blend_fog_tris();
