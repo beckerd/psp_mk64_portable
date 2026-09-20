@@ -503,10 +503,10 @@ void display_and_vsync(void) {
 #else
     port_gfx_start_frame();
     port_gfx_run(gGfxPool->gfxPool);
-    if (verbose) PORT_LOG(" gfx run done\n");
     port_gfx_end_frame();
-    if (verbose) PORT_LOG(" gfx end done\n");
-    port_audio_frame();
+    if (gPortHalfFrame != 1) { /* once per game frame: the mixer is paced by it, a split frame is two pictures */
+        port_audio_frame();
+    }
     if (verbose) PORT_LOG(" audio done\n");
 #endif
     // Two VI retraces per game frame (30 fps).
@@ -665,6 +665,14 @@ void race_logic_loop(void) {
 
     gMatrixObjectCount = 0;
     gMatrixEffectCount = 0;
+#ifdef TARGET_PSP
+    /* A split frame (port.h, gPortHalfFrame): its second half picks up after
+     * tick 1 -- whatever that tick did (pause, quit) takes effect next frame,
+     * as it would have. */
+    if (gPortHalfFrame == 2) {
+        goto port_second_half;
+    }
+#endif
     if (gIsGamePaused != 0) {
         func_80290B14();
     }
@@ -680,10 +688,50 @@ void race_logic_loop(void) {
         sNumVBlanks = 1;
     }
     func_802A4EF4();
+#ifdef TARGET_PSP
+port_second_half:
+#endif
 
     switch (gActiveScreenMode) {
         case SCREEN_MODE_1P:
             gTickSpeed = 2;
+#ifdef TARGET_PSP
+            if (gPortHalfFrame != 0) {
+                /* the 1P frame below, one tick per picture */
+                if (gPortHalfFrame == 1) {
+                    replays_loop();
+                }
+                if (gIsGamePaused == 0 || gPortHalfFrame == 2) {
+                    if (D_8015011E) {
+                        gCourseTimer += COURSE_TIMER_ITER;
+                    }
+                    func_802909F0();
+                    evaluate_collision_for_players_and_actors();
+                    handle_a_press_for_all_players_during_race();
+                    func_8001EE98(gPlayerOneCopy, camera1, 0);
+                    func_80028F70();
+                    func_8028F474();
+                    func_80059AC8();
+                    update_course_actors();
+                    course_update_water();
+                    func_8028FCBC();
+                    /* The kart sprite loader fills the buffers of this picture's
+                     * gfx pool, so both halves need it (render-side only). */
+                    func_80022744();
+                }
+                /* Objects and HUD: updated once per frame (second half); the
+                 * first half only prepares this picture's render state, as the
+                 * paused game does. */
+                func_8005A070();
+                if (gPortHalfFrame == 2) {
+                    sNumVBlanks = 0;
+                }
+                profiler_log_thread5_time(LEVEL_SCRIPT_EXECUTE);
+                D_8015F788 = 0;
+                render_player_one_1p_screen();
+                break;
+            }
+#endif
             replays_loop();
             if (gIsGamePaused == 0) {
                 for (i = 0; i < gTickSpeed; i++) {
@@ -1359,6 +1407,66 @@ void port_audio_frame(void) {
 }
 
 int gPortTraceArm; /* debug: set to re-arm the per-phase trace for a few frames */
+#include <stdio.h>
+s32 gPortHalfFrame = 0;
+s32 gPortVblanksPerFrame = 2;
+s32 gPortLastFrameVblanks = 2;
+u32 gPortLastFrameBusyUs = 0;
+static s32 sPortSplitHoldoff; /* iterations left at 30 fps after 60 could not be held */
+
+/* A frame may be split when it is a plain 1P race frame: the 2P-4P loops and
+ * the lockstep (one network frame per iteration) keep whole frames. */
+static s32 port_frame_can_split(void) {
+    static s32 sOff = -1;
+    if (sOff < 0) { /* test knob: a data/fps30 file keeps whole frames, for A/B runs */
+        FILE* f = fopen(port_save_path("fps30"), "rb");
+        sOff = f != NULL;
+        if (f != NULL) fclose(f);
+        PORT_LOG("fps: split frames (60 fps in 1P races) %s\n", sOff ? "off (data/fps30)" : "on");
+    }
+    if (sOff) {
+        return 0;
+    }
+    if (gGamestate != RACING || gActiveScreenMode != SCREEN_MODE_1P || gIsGamePaused != 0 ||
+        gIsInQuitToMenuTransition != 0 || sPortSplitHoldoff > 0) {
+        return 0;
+    }
+#ifdef PORT_NET
+    if (port_net_active()) {
+        return 0;
+    }
+#endif
+    return 1;
+}
+
+/* Halves that miss their vblank run the game slow: past a quarter of them in
+ * two seconds, fall back to whole frames for a while, then try again. */
+static void port_split_stats(void) {
+    static u32 sHalves, sMissed, sBusySum, sBusyMax, sLogHalves;
+    if (sPortSplitHoldoff > 0) {
+        sPortSplitHoldoff--;
+    }
+    if (gPortHalfFrame == 0) {
+        return;
+    }
+    sHalves++; sLogHalves++;
+    sBusySum += gPortLastFrameBusyUs;
+    if (gPortLastFrameBusyUs > sBusyMax) sBusyMax = gPortLastFrameBusyUs;
+    if (gPortLastFrameVblanks > 1) sMissed++;
+    if (sHalves == 120) {
+        if (sMissed > 30) {
+            sPortSplitHoldoff = 300;
+            PORT_LOG("fps: 60 not held (%u of 120 pictures late): 30 fps for 10 s\n", (unsigned) sMissed);
+        }
+        if (sLogHalves >= 600 || sMissed > 30) {
+            PORT_LOG("fps: split frames: busy %u us avg, %u max per picture (16667 = 60 fps), %u of 120 late\n",
+                     (unsigned) (sBusySum / sHalves), (unsigned) sBusyMax, (unsigned) sMissed);
+            sLogHalves = 0;
+        }
+        sHalves = sMissed = sBusySum = sBusyMax = 0;
+    }
+}
+
 void port_game_loop_one_iteration(void) {
     if (gPortTraceArm) { sPortTraceFrames = gPortTraceArm; gPortTraceArm = 0; }
     { /* a heartbeat every 60 iterations, and every phase change as it happens (a crash log ends with where it was) */
@@ -1372,6 +1480,13 @@ void port_game_loop_one_iteration(void) {
         }
     }
     PORT_TRACE("iteration start (timer %d)\n", gGlobalTimer);
+    port_split_stats();
+    if (gPortHalfFrame == 1) {
+        /* The second half of a split frame: the frame's audio commands, state
+         * change and pad read were its first half's. */
+        gPortHalfFrame = 2;
+        config_gfx_pool();
+    } else {
 #if PORT_ENABLE_AUDIO
     func_800CB2C4();
     PORT_TRACE(" func_800CB2C4 done\n");
@@ -1384,6 +1499,9 @@ void port_game_loop_one_iteration(void) {
     }
     config_gfx_pool();
     read_controllers();
+    gPortHalfFrame = port_frame_can_split() ? 1 : 0;
+    }
+    gPortVblanksPerFrame = gPortHalfFrame != 0 ? 1 : 2;
     PORT_TRACE(" game_state_handler (state %d, menu %d)\n", gGamestate, gMenuSelection);
 #ifdef PORT_PROFILE
     {

@@ -1044,6 +1044,8 @@ static void gfx_scegu_start_frame(void) {
 void gfx_scegu_on_resize(void) {
 }
 
+extern int gPortVblanksPerFrame, gPortLastFrameVblanks; /* port.h (s32): the 60 fps split frames */
+extern unsigned int gPortLastFrameBusyUs;
 static void gfx_scegu_end_frame(void) {
     static unsigned int max_used, frames;
     unsigned int used = (unsigned int) sceGuFinish();
@@ -1059,11 +1061,15 @@ static void gfx_scegu_end_frame(void) {
     // for the second vblank since the last swap (no wait if we are already late).
     {
         static int last_vcount = -1;
-        int target = last_vcount + 2;
+        static unsigned int last_swap_us;
+        int target = last_vcount + gPortVblanksPerFrame; // 2, or 1 for a split (60 fps) frame
+        gPortLastFrameBusyUs = sceKernelGetSystemTimeLow() - last_swap_us;
         while (last_vcount >= 0 && (int) sceDisplayGetVcount() < target) {
             sceDisplayWaitVblankStart();
         }
+        gPortLastFrameVblanks = last_vcount >= 0 ? (int) sceDisplayGetVcount() - last_vcount : gPortVblanksPerFrame;
         last_vcount = (int) sceDisplayGetVcount();
+        last_swap_us = sceKernelGetSystemTimeLow();
     }
     cur_draw_fb = sceGuSwapBuffers(); // the buffer the next frame renders into
 }

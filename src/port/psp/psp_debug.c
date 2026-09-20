@@ -169,7 +169,7 @@ void port_debug_frame_begin(u32 frame) {
         extern int gfx_dump_textures;
         extern void gfx_debug_flush_texture_cache(void);
         gfx_dump_textures = (frame >= 955 && frame <= 975) || (frame >= 1300 && frame <= 1320);
-        if (frame == 2039) {
+        if (frame == 2039 && gPortHalfFrame == 0) { /* between frames only: never between the halves of a split frame */
             gfx_debug_flush_texture_cache();
         }
     }

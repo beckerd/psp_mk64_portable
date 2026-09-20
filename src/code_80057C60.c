@@ -1453,7 +1453,11 @@ void func_8005A070(void) {
     gMatrixHudCount = 0;
     D_801655C0 = 0;
     func_80041D34();
+#ifdef TARGET_PSP
+    if (gIsGamePaused == false && gPortHalfFrame != 1) { /* port.h: a split frame updates in its second half */
+#else
     if (gIsGamePaused == false) {
+#endif
         func_8005C728();
         if (gGamestate == ENDING) {
             func_80086604();

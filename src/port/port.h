@@ -85,6 +85,18 @@ void port_log(const char* fmt, ...);
  * is the tile in the course texture segment, written in N64 texel order. */
 void port_fb_copy_request(s32 x, s32 y, s32 w, s32 h, u16* target);
 
+/* 60 fps experiment (branch max_fps_experiments).  MK64 simulates two ticks per
+ * displayed frame in 1P.  A "split frame" shows one picture per tick instead:
+ * iteration A runs everything up to and including tick 1 and renders, iteration
+ * B runs tick 2 and the rest of the frame and renders again.  The simulation
+ * executes exactly the same operations in the same order, only with a picture
+ * in between, so game speed, physics, ghosts and lockstep are untouched.
+ * gPortHalfFrame: 0 = a whole frame (30 fps), 1 = first half, 2 = second half. */
+extern s32 gPortHalfFrame;
+extern s32 gPortVblanksPerFrame;  /* what end_frame waits for: 2 (30 fps) or 1 (60 fps) */
+extern s32 gPortLastFrameVblanks; /* how many the last frame actually took */
+extern u32 gPortLastFrameBusyUs;  /* its CPU+GE time, the vblank wait excluded */
+
 /* Frame hooks implemented by the platform backend. */
 void port_gfx_run(Gfx* dl);        // execute a display list (F3DEX -> sceGu)
 void port_gfx_start_frame(void);
