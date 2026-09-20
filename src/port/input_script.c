@@ -43,6 +43,24 @@ typedef struct {
 #define TAP(f, b) { (f), (f) + 5, (b), 0, 0 }
 
 static const ScriptStep sSteps[] = {
+#if defined(PORT_NET) && defined(PORT_NET_RECOUNT_TEST)
+    /* docs/adhoc.md "Another number of players": in the 2P session the host
+     * backs out of the character select to the game select, picks 3P GAME and
+     * confirms.  The session must end on both machines in that frame: the host
+     * goes to WAITING FOR 2 MORE PLAYERS, the joiner gets HOST DISCONNECTED,
+     * dismisses it and joins the new race (see the joiner's taps below). */
+    TAP(660, A_BUTTON),  // the 2P OK: the lobby (the clock stops), then the session
+    TAP(780, B_BUTTON),  // character select -> game select (OK)
+    TAP(880, B_BUTTON),  // -> class
+    TAP(910, B_BUTTON),  // -> mode
+    TAP(940, B_BUTTON),  // -> number of players
+    TAP(970, R_JPAD),    // 3P GAME
+    TAP(1000, A_BUTTON), // mode (VS)
+    TAP(1030, A_BUTTON), // class
+    TAP(1060, A_BUTTON), // -> OK
+    TAP(1120, A_BUTTON), // OK: another number of players
+    { 640, 1000000, 0, 0, 0 },
+#endif
 #ifndef PORT_STRAIGHT_RACE
     TAP(1560, START_BUTTON), // pause mid-race (first so it wins over the held-A steps); shot1590/1620 show the pause screen
     { 1566, 1640, 0, 0, 0 }, // ...and release everything: a new A press would pick "CONTINUE GAME"
@@ -151,8 +169,25 @@ void port_input_script(OSContPad* pad) {
      * Right on two pads as two presses. */
     if (port_net_lobby_active()) {
         pad->button = 0; pad->stick_x = pad->stick_y = 0;
+#ifdef PORT_NET_RECOUNT_TEST
+        { static int n; if (sFrame >= 700 && ++n == 120) port_screenshot(7100); } /* the second lobby */
+#endif
         return;
     }
+#ifdef PORT_NET_RECOUNT_TEST
+    {
+        static int sJoiner, sCalls;
+        if (port_net_active() && port_net_local_slot() != 0) sJoiner = 1;
+        if (sJoiner && sFrame >= 670) {
+            pad->button = 0; pad->stick_x = pad->stick_y = 0;
+            if (port_net_modal_active() || !port_net_active()) { /* the prompt, then the game select it leaves */
+                sCalls++;
+                if (sCalls == 60) port_screenshot(7000);
+                if (sCalls > 90 && (sCalls % 40) < 6) pad->button = A_BUTTON;
+            }
+        }
+    }
+#endif
     if (port_net_active() && port_net_local_slot() != 0) {
         pad->button &= ~(R_JPAD | L_JPAD);
     }
