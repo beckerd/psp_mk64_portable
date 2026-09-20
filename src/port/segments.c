@@ -180,7 +180,12 @@ void port_log(const char* fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
     va_end(ap);
-    fputs(buf, stdout);
+    /* No I/O of any kind while a race is deferred to RAM -- stdout included: it
+     * goes through the kernel's I/O layer too, and a 2.3 s freeze on hardware
+     * sat inside this function with the RAM buffer a quarter full. */
+    if (!gPortLogDefer) {
+        fputs(buf, stdout);
+    }
     {
         static s32 sSync = -1;
         u32 len = (u32) strlen(buf);

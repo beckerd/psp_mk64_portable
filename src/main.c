@@ -1468,6 +1468,8 @@ void port_audio_frame(void) {
 int gPortTraceArm; /* debug: set to re-arm the per-phase trace for a few frames */
 #include <stdio.h>
 s32 gPortHalfFrame = 0;
+static u32 sStallT[4];
+extern u32 port_time_us(void);
 s32 gPortVblanksPerFrame = 2;
 s32 gPortLastFrameVblanks = 2;
 u32 gPortLastFrameBusyUs = 0;
@@ -1661,7 +1663,12 @@ void port_game_loop_one_iteration(void) {
         }
     }
     PORT_TRACE("iteration start (timer %d)\n", gGlobalTimer);
+    /* Stall detector: a race iteration that takes over 300 ms logs where the
+     * time went (five clock reads an iteration).  A 2-3 s freeze was seen on
+     * hardware once; this names the phase if it comes back. */
+    sStallT[0] = port_time_us();
     port_split_stats();
+    sStallT[1] = port_time_us();
     SEG_START();
     if (gPortHalfFrame == 1) {
         /* The second half of a split frame: the frame's audio commands, state
@@ -1684,6 +1691,7 @@ void port_game_loop_one_iteration(void) {
     gPortHalfFrame = port_frame_can_split() ? 1 : 0;
     }
     gPortVblanksPerFrame = gPortHalfFrame != 0 ? 1 : 2;
+    sStallT[2] = port_time_us();
     SEG_END(SEG_PRE); /* audio commands, state change, gfx pool, pads -- a first half's; a second half's is the pool alone */
     gPortLogDefer = gGamestate == RACING && gIsGamePaused == 0; /* no memory-stick stalls in a race */
     if (!gPortLogDefer) {
@@ -1702,10 +1710,20 @@ void port_game_loop_one_iteration(void) {
 #else
     game_state_handler();
 #endif
+    sStallT[3] = port_time_us();
     PORT_TRACE(" end_master_display_list\n");
     end_master_display_list();
     PORT_TRACE(" display_and_vsync (%d gfx cmds)\n", (int) (gDisplayListHead - gGfxPool->gfxPool));
     display_and_vsync();
+    {
+        u32 end = port_time_us();
+        if (gGamestate == RACING && end - sStallT[0] > 300000u && sStallT[3] != 0) {
+            PORT_LOG("stall: %u ms in one race iteration (half %d): stats+log %u, pads+audio cmds %u, game logic %u, renderer+GE+vsync+mixer %u\n",
+                     (unsigned) ((end - sStallT[0]) / 1000u), (int) gPortHalfFrame, (unsigned) ((sStallT[1] - sStallT[0]) / 1000u),
+                     (unsigned) ((sStallT[2] - sStallT[1]) / 1000u), (unsigned) ((sStallT[3] - sStallT[2]) / 1000u),
+                     (unsigned) ((end - sStallT[3]) / 1000u));
+        }
+    }
     PORT_TRACE(" frame done\n");
     if (sPortTraceFrames != 0) {
         sPortTraceFrames--;
