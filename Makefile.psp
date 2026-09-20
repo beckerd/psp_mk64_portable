@@ -155,7 +155,11 @@ $(BUILD_DIR)/assets/code/startup_logo/startup_logo.o: CFLAGS += -Dreflection_map
 # Only the extra libraries: psp-gcc's default spec appends -lc/-lpspuser/... last.
 # Listing those again scans the stub archives twice, which splits each SDK
 # library's import stubs into two runs and psp-fixup-imports then bails out.
-LIBS    := -lpspgu -lpspgum -lpspvfpu -lpspmath -lpspctrl -lpspge -lpspdisplay -lpspaudio -lpsppower -lpspdebug \
+# -DPORT_ME_AUDIO (src/port/psp/me_audio.c): the mixer on the Media Engine.
+ifneq (,$(findstring PORT_ME_AUDIO,$(EXTRA_CFLAGS)))
+  ME_LIBS := -lme-core
+endif
+LIBS    := $(ME_LIBS) -lpspgu -lpspgum -lpspvfpu -lpspmath -lpspctrl -lpspge -lpspdisplay -lpspaudio -lpsppower -lpspdebug \
            -lpspnet -lpspnet_adhoc -lpspnet_adhocctl -lpsputility -lpspwlan
 
 #==============================================================================#

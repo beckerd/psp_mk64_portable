@@ -125,4 +125,58 @@ void aInterleaveOldImpl(uint16_t left, uint16_t right);
 #define aUnknown25(pkt, f, c, o, i) aUnknown25Impl(f, c, o, i)
 #endif
 
+
+/* The game records its commands into a job (mix_jobs.h); the mixer and the job
+ * executor keep the real entry points. */
+#ifndef MIXER_INTERNAL
+#define aClearBufferImpl mixq_aClearBuffer
+#define aLoadADPCMImpl mixq_aLoadADPCM
+#define aSetBufferImpl mixq_aSetBuffer
+#define aDMEMMoveImpl mixq_aDMEMMove
+#define aSetLoopImpl mixq_aSetLoop
+#define aADPCMdecImpl mixq_aADPCMdec
+#define aResampleImpl mixq_aResample
+#define aLoadBufferImpl mixq_aLoadBuffer
+#define aSaveBufferImpl mixq_aSaveBuffer
+#define aInterleaveOldImpl mixq_aInterleaveOld
+#define aInterleaveImpl mixq_aInterleave
+#define aMixImpl mixq_aMix
+#define aEnvSetup1Impl mixq_aEnvSetup1
+#define aEnvSetup2Impl mixq_aEnvSetup2
+#define aEnvMixerImpl mixq_aEnvMixer
+#define aS8DecImpl mixq_aS8Dec
+#define aAddMixerImpl mixq_aAddMixer
+#define aDuplicateImpl mixq_aDuplicate
+#define aDMEMMove2Impl mixq_aDMEMMove2
+#define aResampleZohImpl mixq_aResampleZoh
+#define aDownsampleHalfImpl mixq_aDownsampleHalf
+#define aFilterImpl mixq_aFilter
+#define aHiLoGainImpl mixq_aHiLoGain
+#define aUnknown25Impl mixq_aUnknown25
+void mixq_aClearBuffer(uint16_t addr, int nbytes);
+void mixq_aLoadADPCM(int n, const int16_t* book);
+void mixq_aSetBuffer(uint8_t f, uint16_t in, uint16_t out, uint16_t nbytes);
+void mixq_aDMEMMove(uint16_t in, uint16_t out, int nbytes);
+void mixq_aSetLoop(ADPCM_STATE* s);
+void mixq_aADPCMdec(uint8_t f, ADPCM_STATE s);
+void mixq_aResample(uint8_t f, uint16_t pitch, RESAMPLE_STATE s);
+void mixq_aLoadBuffer(const void* src, uint16_t dest, uint16_t nbytes);
+void mixq_aSaveBuffer(uint16_t src, int16_t* dest, uint16_t nbytes);
+void mixq_aInterleaveOld(uint16_t l, uint16_t r);
+void mixq_aInterleave(uint16_t d, uint16_t l, uint16_t r, uint16_t c);
+void mixq_aMix(int16_t gain, uint16_t in, uint16_t out, uint16_t count);
+void mixq_aEnvSetup1(uint8_t a, uint16_t b, uint16_t c, uint16_t d);
+void mixq_aEnvSetup2(uint16_t l, uint16_t r);
+void mixq_aEnvMixer(uint16_t in, uint16_t n, bool swap, bool negl, bool negr, uint16_t dl, uint16_t dr, uint16_t wl, uint16_t wr);
+void mixq_aS8Dec(uint8_t f, ADPCM_STATE s);
+void mixq_aAddMixer(uint16_t in, uint16_t out, uint16_t c);
+void mixq_aDuplicate(uint16_t in, uint16_t out, uint16_t c);
+void mixq_aDMEMMove2(uint8_t t, uint16_t in, uint16_t out, uint16_t c);
+void mixq_aResampleZoh(uint16_t pitch, uint16_t frac);
+void mixq_aDownsampleHalf(uint16_t n, uint16_t in, uint16_t out);
+void mixq_aFilter(uint8_t f, uint16_t c, int16_t* s);
+void mixq_aHiLoGain(uint8_t g, uint16_t c, uint16_t addr);
+void mixq_aUnknown25(uint8_t f, uint16_t c, uint16_t out, uint16_t in);
+#endif
+
 #endif

@@ -8,6 +8,9 @@
 #include "audio/load.h"
 #include "audio/heap.h"
 #include "audio/data.h"
+#ifdef TARGET_PSP
+#include "port/audio/mix_jobs.h"
+#endif
 
 OSMesgQueue D_801937C0;
 OSMesgQueue D_801937D8;
@@ -71,7 +74,12 @@ struct SPTask* create_next_audio_frame_task(void) {
     samplesRemainingInAI = osAiGetLength() / 4;
 
     if (gAiBufferLengths[index] != 0) {
+#ifdef TARGET_PSP
+        /* The buffer was mixed by a job two tasks ago (port/audio/mix_jobs.h). */
+        osAiSetNextBuffer(port_mix_wait(index, gAiBuffers[index]), gAiBufferLengths[index] * 4);
+#else
         osAiSetNextBuffer(gAiBuffers[index], gAiBufferLengths[index] * 4);
+#endif
     }
     oldDmaCount = gCurrAudioFrameDmaCount;
     for (var_s0 = 0; var_s0 < gCurrAudioFrameDmaCount; var_s0++) {
@@ -97,6 +105,9 @@ struct SPTask* create_next_audio_frame_task(void) {
         gAudioResetStatus = 5;
     }
     if (gAudioResetStatus != 0) {
+#ifdef TARGET_PSP
+        port_mix_drain(); /* the reset frees what queued jobs point at */
+#endif
 #ifndef TARGET_N64
         /* Ports: step the reset every call and produce nothing until it fully
          * completes.  The game issues a spec change (audio reset) and the
@@ -136,7 +147,13 @@ struct SPTask* create_next_audio_frame_task(void) {
     while (osRecvMesg(D_800EA3AC, &sp54, 0) != -1) {
         func_800CBCB0((u32) sp54);
     }
+#ifdef TARGET_PSP
+    port_mix_begin(index);
+#endif
     gAudioCmd = synthesis_execute((Acmd*) gAudioCmd, &writtenCmds, currAiBuffer, gAiBufferLengths[index]);
+#ifdef TARGET_PSP
+    port_mix_submit();
+#endif
     gAudioRandom = osGetCount() * (gAudioRandom + gAudioFrameCount);
     gAudioRandom = gAudioRandom + gAiBuffers[index][gAudioFrameCount & 0xFF];
 

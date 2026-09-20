@@ -47,6 +47,8 @@ extern void port_game_loop_one_iteration(void);
 static int sRunning = 1;
 
 static int exit_callback(UNUSED int arg1, UNUSED int arg2, UNUSED void* common) {
+    extern void port_me_stop(void);
+    port_me_stop(); /* the Media Engine must not keep running our image after we are gone */
     sRunning = 0;
     sceKernelExitGame();
     return 0;

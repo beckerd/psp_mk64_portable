@@ -1,3 +1,4 @@
+#define MIXER_INTERNAL
 #define NEW_AUDIO_UCODE
 #include <stdbool.h>
 #include <stdint.h>
