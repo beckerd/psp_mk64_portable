@@ -494,7 +494,9 @@ void display_and_vsync(void) {
         t1 = port_time_us();
         port_gfx_end_frame();
         t2 = port_time_us();
-        port_audio_frame();
+        if (gPortHalfFrame != 1) { /* once per game frame, as below */
+            port_audio_frame();
+        }
         t3 = port_time_us();
         port_profile_add(1, t1 - t0);
         port_profile_add(2, t2 - t1);
