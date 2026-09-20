@@ -7761,6 +7761,27 @@ void render_menu_item_announce_ghost(MenuItem* arg0) {
     print_text1_center_mode_1(arg0->column - 3, arg0->row, gTextMenuAnnounceGhost, 0, 0.85f, 0.85f);
 }
 
+#ifdef PORT_NET
+/* Ad hoc: every machine shows one player full screen, so whoever paused, the
+ * pause menu takes the 1P layout; QUIT keeps the session (everyone lands on
+ * the game select together), so it is named for where it goes, next to the
+ * LEAVE MULTIPLAYER line that does end it (docs/adhoc.md). */
+#define PAUSE_LAYOUT_IDX (port_net_active() ? 0 : (gScreenModeSelection * 4) + (gIsGamePaused - 1))
+#define PAUSE_BOX_FULL_SCREEN(x, y, halfW, halfH) \
+    if (port_net_active()) { (x) = 159; (y) = 119; (halfW) = 160; (halfH) = 120; } /* 0..319 x 0..239, as the 1P time-trials pause */
+static char* pause_button_text(s32 index) {
+    if (port_net_active()) {
+        if (index == 0) return "CONTINUE";
+        if (index == 4) return "MAIN MENU";
+    }
+    return gTextPauseButton[index];
+}
+#else
+#define PAUSE_LAYOUT_IDX ((gScreenModeSelection * 4) + (gIsGamePaused - 1))
+#define PAUSE_BOX_FULL_SCREEN(x, y, halfW, halfH)
+#define pause_button_text(index) gTextPauseButton[index]
+#endif
+
 void render_pause_menu(MenuItem* arg0) {
 #ifdef PORT_NET
     if (port_net_modal_active()) {
@@ -7844,9 +7865,10 @@ void render_pause_menu_versus(MenuItem* arg0) {
     temp_t0 = temp_v0->screenStartY;
     temp_t3 = temp_v0->screenWidth / 2;
     temp_t4 = temp_v0->screenHeight / 2;
+    PAUSE_BOX_FULL_SCREEN(temp_v1, temp_t0, temp_t3, temp_t4);
     gDisplayListHead = draw_box(gDisplayListHead, temp_v1 - temp_t3, temp_t0 - temp_t4, temp_v1 + temp_t3,
                                 temp_t0 + temp_t4, 0, 0, 0, 0x0000008C);
-    temp_s3 = &D_800E8540[(gScreenModeSelection * 4) + (gIsGamePaused - 1)];
+    temp_s3 = &D_800E8540[PAUSE_LAYOUT_IDX];
     for (var_s0 = 0; var_s0 < 4; var_s0++) {
         if (var_s0 > 0) {
             var_s1 = var_s0 + 1;
@@ -7854,8 +7876,14 @@ void render_pause_menu_versus(MenuItem* arg0) {
             var_s1 = var_s0;
         }
         text_rainbow_effect(arg0->state - 0x15, var_s0, TEXT_YELLOW);
-        print_text_mode_1(temp_s3->column - 2, temp_s3->row + (13 * var_s0), gTextPauseButton[var_s1], 0, 0.75f, 0.75f);
+        print_text_mode_1(temp_s3->column - 2, temp_s3->row + (13 * var_s0), pause_button_text(var_s1), 0, 0.75f, 0.75f);
     }
+#ifdef PORT_NET
+    if (port_net_active()) { // ad hoc: one more line (docs/adhoc.md)
+        text_rainbow_effect(arg0->state - 0x15, 4, TEXT_YELLOW);
+        print_text_mode_1(temp_s3->column - 2, temp_s3->row + (13 * 4), "LEAVE MULTIPLAYER", 0, 0.75f, 0.75f);
+    }
+#endif
 }
 
 void render_pause_grand_prix(MenuItem* arg0) {
@@ -7875,9 +7903,10 @@ void render_pause_grand_prix(MenuItem* arg0) {
     temp_t0 = temp_v0->screenStartY;
     temp_t3 = temp_v0->screenWidth / 2;
     temp_t4 = temp_v0->screenHeight / 2;
+    PAUSE_BOX_FULL_SCREEN(temp_v1, temp_t0, temp_t3, temp_t4);
     gDisplayListHead = draw_box(gDisplayListHead, temp_v1 - temp_t3, temp_t0 - temp_t4, temp_v1 + temp_t3,
                                 temp_t0 + temp_t4, 0, 0, 0, 140);
-    temp_s3 = &D_800E85C0[(gScreenModeSelection * 4) + (gIsGamePaused - 1)];
+    temp_s3 = &D_800E85C0[PAUSE_LAYOUT_IDX];
     temp_s0 = ((get_string_width(gCupNames[gCupSelection]) * one) + 10.0f) / 2;
     temp_s1 = ((get_string_width(D_800E76CC[gCCSelection]) * one) + 10.0f) / 2;
     set_text_color(TEXT_YELLOW);
@@ -7889,8 +7918,14 @@ void render_pause_grand_prix(MenuItem* arg0) {
                               gCourseNamesDup[gCupCourseOrder[gCupSelection][gCourseIndexInCup]], 0, 1.0f, 1.0f);
     for (var_s0 = 0; var_s0 < 2; var_s0++) {
         text_rainbow_effect(arg0->state - 31, var_s0, TEXT_YELLOW);
-        print_text_mode_1(temp_s3->column, temp_s3->row + (var_s0 * 13), gTextPauseButton[var_s0 * 4], 0, 0.75f, 0.75f);
+        print_text_mode_1(temp_s3->column, temp_s3->row + (var_s0 * 13), pause_button_text(var_s0 * 4), 0, 0.75f, 0.75f);
     }
+#ifdef PORT_NET
+    if (port_net_active()) { // ad hoc: one more line (docs/adhoc.md)
+        text_rainbow_effect(arg0->state - 31, 2, TEXT_YELLOW);
+        print_text_mode_1(temp_s3->column, temp_s3->row + (2 * 13), "LEAVE MULTIPLAYER", 0, 0.75f, 0.75f);
+    }
+#endif
 }
 
 void render_pause_battle(MenuItem* arg0) {
@@ -7908,9 +7943,10 @@ void render_pause_battle(MenuItem* arg0) {
     temp_t0 = temp_v0->screenStartY;
     temp_t3 = temp_v0->screenWidth / 2;
     temp_t4 = temp_v0->screenHeight / 2;
+    PAUSE_BOX_FULL_SCREEN(temp_v1, temp_t0, temp_t3, temp_t4);
     gDisplayListHead = draw_box(gDisplayListHead, temp_v1 - temp_t3, temp_t0 - temp_t4, temp_v1 + temp_t3,
                                 temp_t0 + temp_t4, 0, 0, 0, 0x0000008C);
-    temp_s3 = &D_800E8600[(gScreenModeSelection * 4) + (gIsGamePaused - 1)];
+    temp_s3 = &D_800E8600[PAUSE_LAYOUT_IDX];
     for (var_a1 = 0; var_a1 < 4; var_a1++) {
         if (var_a1 > 0) {
             var_s1 = var_a1 + 1;
@@ -7918,8 +7954,14 @@ void render_pause_battle(MenuItem* arg0) {
             var_s1 = var_a1;
         }
         text_rainbow_effect(arg0->state - 0x29, var_a1, TEXT_YELLOW);
-        print_text_mode_1(temp_s3->column - 2, temp_s3->row + 13 * var_a1, gTextPauseButton[var_s1], 0, 0.75f, 0.75f);
+        print_text_mode_1(temp_s3->column - 2, temp_s3->row + 13 * var_a1, pause_button_text(var_s1), 0, 0.75f, 0.75f);
     }
+#ifdef PORT_NET
+    if (port_net_active()) { // ad hoc: one more line (docs/adhoc.md)
+        text_rainbow_effect(arg0->state - 0x29, 4, TEXT_YELLOW);
+        print_text_mode_1(temp_s3->column - 2, temp_s3->row + 13 * 4, "LEAVE MULTIPLAYER", 0, 0.75f, 0.75f);
+    }
+#endif
 }
 
 void func_800A54EC(void) {
@@ -7948,13 +7990,13 @@ void func_800A54EC(void) {
             var_v1 = &D_800E8538[0];
             break;
         case 2:
-            var_v1 = &D_800E8540[(gScreenModeSelection * 4) + (gIsGamePaused - 1)];
+            var_v1 = &D_800E8540[PAUSE_LAYOUT_IDX];
             break;
         case 0:
-            var_v1 = &D_800E85C0[(gScreenModeSelection * 4) + (gIsGamePaused - 1)];
+            var_v1 = &D_800E85C0[PAUSE_LAYOUT_IDX];
             break;
         case 3:
-            var_v1 = &D_800E8600[(gScreenModeSelection * 4) + (gIsGamePaused - 1)];
+            var_v1 = &D_800E8600[PAUSE_LAYOUT_IDX];
             break;
     }
     whyTheSequel = D_800F0B50[why];
@@ -11606,6 +11648,11 @@ void func_800ADF48(MenuItem* arg0) {
             case 42:
             case 43:
             case 44:
+#ifdef PORT_NET
+            case 25: // ad hoc: LEAVE MULTIPLAYER, the line after each mode's QUIT
+            case 33:
+            case 45:
+#endif
                 if (is_screen_being_faded() == 0) {
                     controller = &gControllers[gIsGamePaused - 1];
                     if ((controller->buttonPressed | controller->stickPressed) & U_JPAD) {
@@ -11619,7 +11666,11 @@ void func_800ADF48(MenuItem* arg0) {
                         }
                     }
                     if ((controller->buttonPressed | controller->stickPressed) & D_JPAD) {
+#ifdef PORT_NET
+                        if (arg0->state < D_800F0B54[gModeSelection] + (port_net_active() ? 1 : 0)) {
+#else
                         if (arg0->state < D_800F0B54[gModeSelection]) {
+#endif
                             arg0->state++;
                             play_sound2(SOUND_MENU_CURSOR_MOVE);
                             if (arg0->paramf < 4.2) {
@@ -11641,6 +11692,11 @@ void func_800ADF48(MenuItem* arg0) {
                             gIsGamePaused = 0;
                             func_8028DF38();
                             func_800C9F90(0U);
+#ifdef PORT_NET
+                        } else if (arg0->state > D_800F0B54[gModeSelection]) {
+                            play_sound2(SOUND_MENU_GO_BACK);
+                            port_net_leave(gIsGamePaused - 1); // every machine, this lockstep frame
+#endif
                         } else {
                             func_8009DFE0(30);
                             play_sound2(SOUND_ACTION_CONTINUE_UNKNOWN);

@@ -1145,6 +1145,24 @@ static void drop_slot(int s, u32 frame, const char* why) {
     PORT_LOG("net: slot %d dropped from frame %u (%s)\n", s, (unsigned) frame, why);
 }
 
+void port_net_leave(int slot) {
+    PORT_LOG("net: slot %d chose LEAVE MULTIPLAYER at frame %u\n", slot, (unsigned) sFrame);
+    if (slot == sSlot) {
+        end_session_to_menu(); /* out, WLAN down, the pause menu's QUIT path */
+    } else if (slot == 0) {
+        transport_down();
+        modal_open(MODAL_HOST_GONE);
+    } else {
+        /* The race stays paused (the pause was the leaver's): the host's
+         * prompt takes it over, CONTINUE unpauses everyone in lockstep. */
+        drop_slot(slot, sFrame + 1, "left");
+        if (sRole == NET_ROLE_HOST) {
+            sModalSlot = slot;
+            if (sModal == MODAL_NONE || sModal == MODAL_RESUMING) modal_open(MODAL_HOST_DROP);
+        }
+    }
+}
+
 int port_net_frame_begin(void) {
     OSContPad pad;
     NetInput in;

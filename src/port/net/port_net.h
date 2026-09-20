@@ -41,6 +41,12 @@ void port_net_lobby_host(void); /* straight to hosting, no HOST / JOIN choice */
  * the host and goes on to its new race, 0 = a joiner, now under the "HOST
  * DISCONNECTED" prompt. */
 int port_net_end_for_new_race(void);
+/* The pause menu's LEAVE MULTIPLAYER, chosen by `slot`'s pad: a lockstep input
+ * too, so every machine acts in that frame.  The leaver goes to the main
+ * menu alone; if it was the host the session ends for everyone ("HOST EXITED
+ * THE GAME"), otherwise the others drop the slot there and the host gets the
+ * drop-out prompt (CONTINUE / EXIT) over the still-paused race. */
+void port_net_leave(int slot);
 int port_net_lobby_active(void);
 void port_net_lobby_update(void);
 void port_net_lobby_draw(void);

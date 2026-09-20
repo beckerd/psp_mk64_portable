@@ -190,8 +190,30 @@ joiner dismisses the prompt and joins.  Expect on both machines `net: the host
 set up a 3-player race at frame N` with the same N, then `lobby -> hosting` /
 `joined the race`; `shot7000` (joiner) is the prompt, `shot7100` the new lobby.
 
-Not there yet: a joiner cannot leave a session on its own short of HOME (the
-host then sees the drop-out prompt after DROP_AFTER_US).
+**LEAVE MULTIPLAYER.**  In a session the pause menu reads CONTINUE / (COURSE
+CHANGE / DRIVER CHANGE in VS and Battle) / MAIN MENU / LEAVE MULTIPLAYER, in
+the 1P layout with the whole screen dimmed (each machine shows one player, so
+the split-screen half is wrong whoever paused).  MAIN MENU is the game's QUIT
+under the name of where it takes everyone.  LEAVE MULTIPLAYER is one line past
+each mode's QUIT state (menu_items.c, states 25 / 33 / 45) and calls
+`port_net_leave(slot)` with the pad that paused -- a lockstep input again, so
+every machine acts in the same frame, without a packet:
+
+- the leaver ends its session, takes the WLAN down and quits to the main menu;
+- if it was the host, every joiner takes the WLAN down and shows "HOST EXITED
+  THE GAME" -- MAIN MENU over the paused race, at once instead of after
+  GIVEUP_AFTER_US;
+- if it was a joiner, the others drop its slot from the next frame (no
+  DROP_AFTER_US wait) and the race stays paused: the host gets "PLAYER N LEFT
+  THE RACE" -- CONTINUE / EXIT, the other joiners "WAITING FOR HOST...", and
+  CONTINUE unpauses everyone in lockstep as after any drop-out.
+
+Scripted test: `-DPORT_NET_LEAVE_TEST=1` (the joiner leaves) or `=2` (the
+host) on the scripted-race build.  Expect `net: slot S chose LEAVE MULTIPLAYER
+at frame N` with the same N on both machines; shot1650 is the pause menu,
+shot1700..1880 the prompt on the machine left behind, whose A at 1900 picks
+CONTINUE / MAIN MENU.  After a joiner left, the host's frame heartbeats go on
+with no new stalls.
 
 ## Drop-outs
 
