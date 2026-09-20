@@ -1522,7 +1522,7 @@ static void port_split_stats(void) {
     {
         extern s32 gPortExpMode;
         static s32 sExpOn = -1;
-        static u32 sExpPic, sExpTotal, sExpSum[7], sExpN[7], sExpLate[7];
+        static u32 sExpPic, sExpTotal, sExpSum[8], sExpN[8], sExpLate[8];
         extern int gExpDirectEmitOff;
         extern s32 gPortOldClip;
         static s32 sNoDirect = -1;
@@ -1540,13 +1540,7 @@ static void port_split_stats(void) {
                 if (cf != NULL) fclose(cf);
                 if (gPortCourseStatic) PORT_LOG("gfx: data/coursestatic: course textures are not re-hashed\n");
             }
-            {
-                extern s32 gPortVfpuOutcodes;
-                FILE* vf = fopen(port_save_path("vfpuoc"), "rb");
-                gPortVfpuOutcodes = vf != NULL;
-                if (vf != NULL) fclose(vf);
-                if (gPortVfpuOutcodes) PORT_LOG("gfx: data/vfpuoc: vertex flags from the VFPU compare\n");
-            }
+
         }
         if (sNoDirect < 0) { /* data/nodirect: batches go through the staging copy again (if direct emit misbehaves on hardware) */
             FILE* nf = fopen(port_save_path("nodirect"), "rb");
@@ -1568,21 +1562,21 @@ static void port_split_stats(void) {
             }
             if (++sExpPic == 60) {
                 sExpPic = 0;
-                gPortExpMode = (gPortExpMode + 1) % 7;
+                gPortExpMode = (gPortExpMode + 1) % 8;
             }
             sPortSplitHoldoff = 0; /* the measurement needs 60 fps pictures: no 30 fps fallback while it runs */
-            if (++sExpTotal == 1260) { /* every 21 s of pictures: three turns of the seven modes */
-                static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports (and so no texture changes)", "everything, batches through the staging copy" };
+            if (++sExpTotal == 1440) { /* every 24 s of pictures: three turns of the eight modes */
+                static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports (and so no texture changes)", "everything, batches through the staging copy", "everything, vertex flags from C compares" };
                 s32 m;
                 {
                     extern u32 gPortExpCount[10];
-                    u32 p = sExpTotal / 7, *c = gPortExpCount; /* counted in mode 0 only: a seventh of the report's pictures */
+                    u32 p = sExpTotal / 8, *c = gPortExpCount; /* counted in mode 0 only: a seventh of the report's pictures */
                     PORT_LOG("exp counts per normal picture: tris in %u, rejected %u, culled %u, clipper %u, emitted %u | rebuilds %u, imports %u, uploads %u, flushes %u | vertices %u\n",
                              (unsigned) (c[0] / p), (unsigned) (c[1] / p), (unsigned) (c[2] / p), (unsigned) (c[3] / p), (unsigned) (c[4] / p),
                              (unsigned) (c[5] / p), (unsigned) (c[6] / p), (unsigned) (c[7] / p), (unsigned) (c[8] / p), (unsigned) (c[9] / p));
                     for (m = 0; m < 10; m++) c[m] = 0;
                 }
-                for (m = 0; m < 7; m++) {
+                for (m = 0; m < 8; m++) {
                     PORT_LOG("exp %d (%s): busy %u us avg per picture over %u pictures, %u late\n", (int) m, names[m],
                              (unsigned) (sExpN[m] ? sExpSum[m] / sExpN[m] : 0), (unsigned) sExpN[m], (unsigned) sExpLate[m]);
                     sExpSum[m] = sExpN[m] = sExpLate[m] = 0;

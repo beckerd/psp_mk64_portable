@@ -134,6 +134,7 @@ struct LoadedVertex {
 #define VOC_ZFAR 0x800    /* beyond the game's far plane */
 #define VOC_CLIP (VOC_GUARD | VOC_NEARW | VOC_ZNEAR | VOC_ZFAR)
 #define VOC_REJECT (VOC_RIGHT | VOC_LEFT | VOC_TOP | VOC_BOTTOM | VOC_FAR) /* all three share one: invisible */
+#define FAR_KEEP_NDC 0.20f /* a far triangle spanning a tenth of the screen (NDC runs -1..1) or more is kept: backdrop */
 
 typedef struct VertexColor {
 	unsigned short u, v;
@@ -646,7 +647,7 @@ static int hud_class(float x0, float x1) {
     return cls;
 }
 s32 gPortExpMode;
-s32 gPortVfpuOutcodes; /* data/vfpuoc (main.c): per-vertex flags from the VFPU compare instead of C compares */
+s32 gPortVfpuOutcodes; /* set by the boot self-test: per-vertex flags from the VFPU compare instead of C compares */
 s32 gPortOldClip; /* data/oldclip (main.c): the clipper runs all seven planes again, for comparing on hardware */
 /* data/exp event counts, per report: [0] triangles in, [1] rejected by outcode
  * or near/far flags, [2] back-face culled, [3] sent to the CPU clipper, [4]
@@ -1792,22 +1793,25 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                  * band (its "any" bit), and vrcp replaces the divide for the
                  * projected position, stored straight into the vertex. */
                 uint32_t cc_edge = 0, cc_guard = 0;
-                if (gPortVfpuOutcodes && ge_guard_ndc == GE_GUARD_NDC) { /* the VFPU code has 3.0 built in */
-                    /* data/vfpuoc: the flags from the VFPU compare's condition
-                     * register.  Pixel-identical in PPSSPP, but on hardware the
-                     * first clean pictures showed ground triangles vanishing, and
-                     * mfvc straight after vcmp is the one step never proven
-                     * there: off by default until it is. */
+                if (gPortVfpuOutcodes && gPortExpMode != 7 && ge_guard_ndc == GE_GUARD_NDC) { /* the VFPU code has 3.0 built in */
+                    /* The flags from the VFPU compare's condition register.  On
+                     * hardware mfvc straight after vcmp returned the previous
+                     * compare's bits (ground triangles vanished); with a vsync
+                     * before the read the boot self-test matches the C compares
+                     * 16 of 16, on the PSP too.  That self-test turns this on
+                     * (gfx_vfpu_outcode_selftest); data/novfpuoc keeps it off. */
                 __asm__ volatile (
                         "vmov.p  c000, c100\n"          /* s000 s001 =  x  y */
                         "vneg.p  c002, c100\n"          /* s002 s003 = -x -y */
                         "vone.q  c010\n"
                         "vscl.q  c010, c010, s103\n"    /* w w w w */
                         "vcmp.q  GT, c000, c010\n"
+                        "vsync\n"                       /* on hardware mfvc straight after vcmp reads the PREVIOUS compare */
                         "mfvc    %1, $131\n"
                         "vfim.s  s020, 3.0\n"           /* GE_GUARD_NDC */
                         "vscl.q  c010, c010, s020\n"
                         "vcmp.q  GT, c000, c010\n"
+                        "vsync\n"
                         "mfvc    %2, $131\n"
                         "vrcp.s  s020, s103\n"
                         "vscl.p  c030, c100, s020\n"    /* x/w y/w */
@@ -2547,9 +2551,29 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     // one AND of the per-vertex outcodes (gfx_sp_vertex).  Measured on
     // hardware, the per-triangle compares this replaces were the largest
     // renderer cost -- 4-5 ms a picture on DK's Jungle Parkway.
-    if (v1->oc & v2->oc & v3->oc & VOC_REJECT) {
-        EXPCOUNT(1, 1);
-        return;
+    {
+        uint32_t oc_all = v1->oc & v2->oc & v3->oc;
+        if (oc_all & (VOC_RIGHT | VOC_LEFT | VOC_TOP | VOC_BOTTOM)) {
+            EXPCOUNT(1, 1);
+            return;
+        }
+        if (oc_all & VOC_FAR) {
+            /* Beyond the draw distance -- but a far triangle that still covers
+             * a good part of the screen is backdrop (the mountain by the ferry
+             * on DK's Jungle Parkway), and dropping it as the kart moves is a
+             * very visible pop.  Only the small far ones go: trees, signs,
+             * track detail.  sx/sy are valid here: a far vertex is in front of
+             * the eye. */
+            float x0 = v1->sx, x1 = v1->sx, y0 = v1->sy, y1 = v1->sy;
+            if (v2->sx < x0) x0 = v2->sx; if (v2->sx > x1) x1 = v2->sx;
+            if (v3->sx < x0) x0 = v3->sx; if (v3->sx > x1) x1 = v3->sx;
+            if (v2->sy < y0) y0 = v2->sy; if (v2->sy > y1) y1 = v2->sy;
+            if (v3->sy < y0) y0 = v3->sy; if (v3->sy > y1) y1 = v3->sy;
+            if (x1 - x0 < FAR_KEEP_NDC && y1 - y0 < FAR_KEEP_NDC) {
+                EXPCOUNT(1, 1);
+                return;
+            }
+        }
     }
 #endif
 
@@ -3889,6 +3913,14 @@ static void gfx_vfpu_outcode_selftest(void) {
         }
     }
     port_log("vfpu outcodes selftest: %u of %u vertices differ from the C compares (%u with vsync before the read); vrcp worst relative error %g\n", bad, (unsigned) (sizeof(tv) / sizeof(tv[0])), bad_sync, worst);
+    {
+        /* The live path is the vsync variant: use it only where it just proved
+         * itself, on this machine. */
+        FILE *nf = fopen(port_save_path("novfpuoc"), "rb");
+        if (nf != NULL) fclose(nf);
+        gPortVfpuOutcodes = bad_sync == 0 && worst < 1.0e-5f && nf == NULL;
+        port_log("gfx: vertex flags from %s\n", gPortVfpuOutcodes ? "the VFPU compare (vsync before each read)" : nf != NULL ? "C compares (data/novfpuoc)" : "C compares (the VFPU self-test failed here)");
+    }
 }
 
 void gfx_init(struct GfxWindowManagerAPI *wapi, struct GfxRenderingAPI *rapi, const char *game_name, bool start_in_fullscreen) {
