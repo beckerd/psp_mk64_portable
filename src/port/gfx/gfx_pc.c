@@ -118,8 +118,21 @@ struct LoadedVertex {
 #define VOC_TOP 0x002
 #define VOC_LEFT 0x004
 #define VOC_BOTTOM 0x008
-#define VOC_GUARD 0x010   /* beyond the GE guard band: the triangle needs the CPU clipper */
+/* Beyond a guard-band plane (x, y, -x, -y > GE_GUARD_NDC * w): the triangle
+ * needs the CPU clipper, and the clipper needs only the planes that are set.
+ * All of these are half-space tests in homogeneous clip space, so they hold for
+ * any sign of w, and a clipped polygon stays inside every plane its triangle's
+ * three vertices were inside. */
+#define VOC_G_RIGHT 0x010
+#define VOC_G_TOP 0x020
+#define VOC_G_LEFT 0x040
+#define VOC_G_BOTTOM 0x080
+#define VOC_GUARD 0x0F0
 #define VOC_FAR 0x100     /* beyond the draw distance */
+#define VOC_NEARW 0x200   /* clip.w < GE_TL_NEAR */
+#define VOC_ZNEAR 0x400   /* nearer than the game's near plane */
+#define VOC_ZFAR 0x800    /* beyond the game's far plane */
+#define VOC_CLIP (VOC_GUARD | VOC_NEARW | VOC_ZNEAR | VOC_ZFAR)
 #define VOC_REJECT (VOC_RIGHT | VOC_LEFT | VOC_TOP | VOC_BOTTOM | VOC_FAR) /* all three share one: invisible */
 
 typedef struct VertexColor {
@@ -1775,10 +1788,12 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                     : "+m"(*d), "=r"(cc_edge), "=r"(cc_guard) :
                 );
                 {
-                    uint32_t oc = proj_vec[3] > gPortDrawDist ? VOC_FAR : 0;
-                    if (d->clip_rej == 0) { /* clip.w >= GE_TL_NEAR > 0: the flags mean something */
-                        oc |= (cc_edge & 0xF) | ((cc_guard >> 4) & 1) << 4;
-                    }
+                    float wz2 = (1.0f - GE_DEPTH_EPS) * proj_vec[3];
+                    uint32_t oc = (cc_edge & 0xF) | (cc_guard & 0xF) << 4;
+                    if (proj_vec[3] > gPortDrawDist) oc |= VOC_FAR;
+                    if (proj_vec[3] < GE_TL_NEAR) oc |= VOC_NEARW;
+                    if (proj_vec[2] + wz2 < 0.0f) oc |= VOC_ZNEAR;
+                    if (wz2 - proj_vec[2] < 0.0f) oc |= VOC_ZFAR;
                     d->oc = oc;
                 }
             }
@@ -2361,42 +2376,60 @@ static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct Loade
         return;
     }
     struct LoadedVertex bufA[10], bufB[10];
+    struct LoadedVertex *in = bufA, *out = bufB, *swap;
+    /* The planes any of the three vertices is outside of (gfx_sp_vertex): a
+     * triangle usually crosses one, and the other six passes -- a copy of every
+     * vertex each -- are skipped.  Hardware count: 300 of a picture's 1000
+     * triangles come through here on DK's Jungle Parkway. */
+    uint32_t m = (a->oc | b->oc | c->oc) & VOC_CLIP;
     int n = 3, i;
+    if (rsp.is_persp == 0 || m == 0) {
+        m = VOC_CLIP; /* no outcodes for this vertex kind: every plane, as before */
+    }
     bufA[0] = *a; bufA[1] = *b; bufA[2] = *c;
 
     // Near plane: keep the portion with clip.w >= GE_TL_NEAR.
-    {
+    if (m & VOC_NEARW) {
         int nout = 0;
         for (i = 0; i < n; i++) {
-            const struct LoadedVertex *cur = &bufA[i];
-            const struct LoadedVertex *nxt = &bufA[(i + 1) % n];
+            const struct LoadedVertex *cur = &in[i];
+            const struct LoadedVertex *nxt = &in[(i + 1) % n];
             int cin = cur->_w >= GE_TL_NEAR, nin = nxt->_w >= GE_TL_NEAR;
-            if (cin && nout < 10) bufB[nout++] = *cur;
+            if (cin && nout < 10) out[nout++] = *cur;
             if (cin != nin && nout < 10) {
                 float t = (GE_TL_NEAR - cur->_w) / (nxt->_w - cur->_w);
-                nclip_lerp(&bufB[nout++], cur, nxt, t);
+                nclip_lerp(&out[nout++], cur, nxt, t);
             }
         }
         n = nout;
+        if (n < 3) return; // fully behind the eye
+        swap = in; in = out; out = swap;
     }
-    if (n < 3) return; // fully behind the eye
 
     // The game's real near and far planes (what the RSP clips against), pulled
     // in by GE_DEPTH_EPS: the GE rejects a whole triangle if any vertex lands
     // outside its depth range, so every emitted vertex must satisfy
     //   clip.z >= -(1-eps)*w   and   clip.z <= (1-eps)*w.
-    const float D = 1.0f - GE_DEPTH_EPS;
-    n = nclip_plane(bufB, n, bufA, 0.0f, 0.0f,  1.0f, D, 10); if (n < 3) return;
-    n = nclip_plane(bufA, n, bufB, 0.0f, 0.0f, -1.0f, D, 10); if (n < 3) return;
-
-    // Four guard-band side planes (all verts now have clip.w >= GE_TL_NEAR > 0):
+    // Then the four guard-band side planes:
     //   clip.x <=  G*w,  clip.x >= -G*w,  clip.y <=  G*w,  clip.y >= -G*w
-    const float G = GE_GUARD_NDC;
-    n = nclip_plane(bufB, n, bufA, -1.0f,  0.0f, 0.0f, G, 10); if (n < 3) return;
-    n = nclip_plane(bufA, n, bufB,  1.0f,  0.0f, 0.0f, G, 10); if (n < 3) return;
-    n = nclip_plane(bufB, n, bufA,  0.0f, -1.0f, 0.0f, G, 10); if (n < 3) return;
-    n = nclip_plane(bufA, n, bufB,  0.0f,  1.0f, 0.0f, G, 10); if (n < 3) return;
-    struct LoadedVertex *out = bufB;
+    {
+        const float D = 1.0f - GE_DEPTH_EPS;
+        const float G = GE_GUARD_NDC;
+        static const struct { uint32_t bit; float ax, ay, az; int guard; } planes[6] = {
+            { VOC_ZNEAR, 0.0f, 0.0f, 1.0f, 0 }, { VOC_ZFAR, 0.0f, 0.0f, -1.0f, 0 },
+            { VOC_G_RIGHT, -1.0f, 0.0f, 0.0f, 1 }, { VOC_G_LEFT, 1.0f, 0.0f, 0.0f, 1 },
+            { VOC_G_TOP, 0.0f, -1.0f, 0.0f, 1 }, { VOC_G_BOTTOM, 0.0f, 1.0f, 0.0f, 1 },
+        };
+        int k;
+        for (k = 0; k < 6; k++) {
+            if (m & planes[k].bit) {
+                n = nclip_plane(in, n, out, planes[k].ax, planes[k].ay, planes[k].az, planes[k].guard ? G : D, 10);
+                if (n < 3) return;
+                swap = in; in = out; out = swap;
+            }
+        }
+    }
+    out = in; /* the last result */
 
     // Back-face cull the clipped polygon (every vertex has w > 0 => exact winding).
     uint32_t cull = rsp.geometry_mode & G_CULL_BOTH;
