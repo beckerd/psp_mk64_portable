@@ -1447,7 +1447,28 @@ static s32 port_frame_can_split(void) {
 static void port_split_stats(void) {
     static u32 sHalves, sMissed, sBusySum, sBusyMax, sLogHalves;
     if (sPortSplitHoldoff > 0) {
+        /* Back at 30 fps because 60 was not held.  Ten seconds was arbitrary
+         * and usually far longer than the heavy stretch: a whole frame is one
+         * 60 fps picture plus one more tick (~2 ms), so its busy time says
+         * whether 60 would fit again.  After at least a second, return as soon
+         * as half a second of frames averages under that; the ten seconds stay
+         * as the upper limit. */
+        static u32 sWholeN, sWholeBusy;
         sPortSplitHoldoff--;
+        if (gPortHalfFrame == 0 && gGamestate == RACING && gIsGamePaused == 0) {
+            sWholeN++;
+            sWholeBusy += gPortLastFrameBusyUs;
+            if (sWholeN == 15) {
+                u32 avg = sWholeBusy / 15;
+                if (sPortSplitHoldoff <= 300 - 30 && avg < 17500) {
+                    PORT_LOG("fps: back to 60 after %d frames at 30 (whole frames now %u us)\n", (int) (300 - sPortSplitHoldoff), (unsigned) avg);
+                    sPortSplitHoldoff = 0;
+                }
+                sWholeN = sWholeBusy = 0;
+            }
+        } else {
+            sWholeN = sWholeBusy = 0;
+        }
     }
     if (gPortHalfFrame == 0) {
         return;
@@ -1576,7 +1597,7 @@ static void port_split_stats(void) {
     if (sHalves == 120) {
         if (sMissed > 14 && !sExpRunning) { /* over an eighth late: the game would run visibly slow */
             sPortSplitHoldoff = 300;
-            PORT_LOG("fps: 60 not held (%u of 120 pictures late): 30 fps for 10 s\n", (unsigned) sMissed);
+            PORT_LOG("fps: 60 not held (%u of 120 pictures late): 30 fps until the frames are light enough again (10 s at most)\n", (unsigned) sMissed);
         }
         if (sLogHalves >= 600 || sMissed > 14) {
             PORT_LOG("fps: split frames: busy %u us avg, %u max per picture (16667 = 60 fps), %u of 120 late, draw distance %d\n",
