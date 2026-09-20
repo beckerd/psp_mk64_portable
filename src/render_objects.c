@@ -3569,6 +3569,33 @@ void render_lakitu(s32 cameraId) {
     objectIndex = gIndexLakituList[cameraId];
     camera = &camera1[cameraId];
     if (is_obj_flag_status_active(objectIndex, 0x00000010) != 0) {
+#ifdef TARGET_PSP
+        /* 60 fps split frames (port.h): objects are updated once per game frame,
+         * so in a frame's first picture the camera has moved a tick and Lakitu,
+         * who hangs in front of it, has not -- he shook at 30 Hz.  Draw him
+         * where he was relative to the camera when last updated (forward is
+         * (sin yaw, cos yaw)); his real position is put back below. */
+        extern s32 gPortHalfFrame;
+        static Vec3f sRel[4];
+        static s16 sYaw[4];
+        Vec3f realPos;
+        s32 moved = 0;
+        object = &gObjectList[objectIndex];
+        if (gPortHalfFrame == 1) {
+            u16 d = (u16) (camera->rot[1] - sYaw[cameraId & 3]);
+            f32 sn = sins(d), cs = coss(d);
+            realPos[0] = object->pos[0]; realPos[1] = object->pos[1]; realPos[2] = object->pos[2];
+            object->pos[0] = camera->pos[0] + sRel[cameraId & 3][0] * cs + sRel[cameraId & 3][2] * sn;
+            object->pos[1] = camera->pos[1] + sRel[cameraId & 3][1];
+            object->pos[2] = camera->pos[2] - sRel[cameraId & 3][0] * sn + sRel[cameraId & 3][2] * cs;
+            moved = 1;
+        } else {
+            sRel[cameraId & 3][0] = object->pos[0] - camera->pos[0];
+            sRel[cameraId & 3][1] = object->pos[1] - camera->pos[1];
+            sRel[cameraId & 3][2] = object->pos[2] - camera->pos[2];
+            sYaw[cameraId & 3] = camera->rot[1];
+        }
+#endif
         object = &gObjectList[objectIndex];
         object->orientation[0] = 0;
         object->orientation[1] = func_800418AC(object->pos[0], object->pos[2], camera->pos);
@@ -3596,6 +3623,11 @@ void render_lakitu(s32 cameraId) {
                 func_8004A630(&D_8018C0B0[cameraId], object->pos, 0.35f);
             }
         }
+#ifdef TARGET_PSP
+        if (moved) {
+            object->pos[0] = realPos[0]; object->pos[1] = realPos[1]; object->pos[2] = realPos[2];
+        }
+#endif
     }
 }
 
