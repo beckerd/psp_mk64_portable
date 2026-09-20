@@ -752,9 +752,19 @@ port_second_half:
                     course_update_water();
                     func_8028FCBC();
                     SEG_END(SEG_TICK);
-                    /* The kart sprite loader fills the buffers of this picture's
-                     * gfx pool, so both halves need it (render-side only). */
-                    func_80022744();
+                    /* Kart animation, particles and the sprite-decode queue: once
+                     * per game frame, as the game does (after both ticks).  It ran
+                     * in both halves for a while -- added while chasing a crash
+                     * that was the debug texture flush -- which cost 1.3 ms a
+                     * picture on hardware and stepped the kart animation twice a
+                     * frame.  The first half draws the sprites decoded for the
+                     * last picture: an empty queue tells the renderer not to
+                     * decode them again. */
+                    if (gPortHalfFrame == 2) {
+                        func_80022744();
+                    } else {
+                        gPlayersToRenderCount = 0;
+                    }
                     SEG_END(SEG_KARTLOAD);
                 }
                 /* Objects and HUD: updated once per frame (second half); the
