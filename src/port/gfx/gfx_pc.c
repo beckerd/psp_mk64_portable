@@ -1364,13 +1364,24 @@ static void gfx_sp_matrix(uint8_t parameters, const int32_t *addr) {
     if (gfx_debug_frame) port_log("  mtx params %02X addr %p stack %d\n", parameters, addr, (int) rsp.modelview_matrix_stack_size);
 #ifndef GBI_FLOATS
     // Original GBI where fixed point matrices are used
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j += 2) {
-            int32_t int_part = addr[i * 2 + j / 2];
-            uint32_t frac_part = addr[8 + i * 2 + j / 2];
-            matrix[i][j] = (int32_t)((int_part & 0xffff0000) | (frac_part >> 16)) / 65536.0f;
-            matrix[i][j + 1] = (int32_t)((int_part << 16) | (frac_part & 0xffff)) / 65536.0f;
+    {
+        /* s15.16 -> float: assemble the 16 words, then one vi2f per row with
+         * the 2^-16 scale built in (exact, as the integer divide by 65536.0f). */
+        int32_t fixed[16] __attribute__((aligned(16)));
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j += 2) {
+                int32_t int_part = addr[i * 2 + j / 2];
+                uint32_t frac_part = addr[8 + i * 2 + j / 2];
+                fixed[i * 4 + j] = (int32_t)((int_part & 0xffff0000) | (frac_part >> 16));
+                fixed[i * 4 + j + 1] = (int32_t)((int_part << 16) | (frac_part & 0xffff));
+            }
         }
+        __asm__ volatile (
+            "lv.q   c000,  0 + %1\n" "lv.q   c010, 16 + %1\n" "lv.q   c020, 32 + %1\n" "lv.q   c030, 48 + %1\n"
+            "vi2f.q c000, c000, 16\n" "vi2f.q c010, c010, 16\n" "vi2f.q c020, c020, 16\n" "vi2f.q c030, c030, 16\n"
+            "sv.q   c000,  0 + %0\n" "sv.q   c010, 16 + %0\n" "sv.q   c020, 32 + %0\n" "sv.q   c030, 48 + %0\n"
+            : "=m"(*matrix) : "m"(*fixed)
+        );
     }
 #else
     // For a modified GBI where fixed point values are replaced with floats
@@ -1453,6 +1464,33 @@ struct ShaderProgram {
     int num_inputs;
 };
 
+/* VFPU lighting (max_fps_experiments).  Refreshed when the lights change: the
+ * light directions with the per-vertex /127 folded in, the light colours, the
+ * ambient colour and the two texgen look-at axes, as aligned quads the vertex
+ * loop loads straight into M500/M600 (unused by the transform next to it). */
+static float vl_coef[MAX_LIGHTS][4] __attribute__((aligned(16)));
+static float vl_col[MAX_LIGHTS][4] __attribute__((aligned(16)));
+static float vl_amb[4] __attribute__((aligned(16)));
+static float vl_look[2][4] __attribute__((aligned(16)));
+static const float vl_255[4] __attribute__((aligned(16))) = { 255.0f, 255.0f, 255.0f, 255.0f };
+
+static void gfx_vfpu_lights_refresh(void) {
+    int i, k, n = rsp.current_num_lights - 1;
+    for (i = 0; i < n && i < MAX_LIGHTS; i++) {
+        for (k = 0; k < 3; k++) {
+            vl_coef[i][k] = rsp.current_lights_coeffs[i][k] * (1.0f / 127.0f);
+            vl_col[i][k] = rsp.current_lights[i].col[k];
+        }
+        vl_coef[i][3] = vl_col[i][3] = 0.0f;
+    }
+    for (k = 0; k < 3; k++) {
+        vl_amb[k] = rsp.current_lights[n].col[k];
+        vl_look[0][k] = rsp.current_lookat_coeffs[0][k] * (1.0f / 127.0f);
+        vl_look[1][k] = rsp.current_lookat_coeffs[1][k] * (1.0f / 127.0f);
+    }
+    vl_amb[3] = vl_look[0][3] = vl_look[1][3] = 0.0f;
+}
+
 static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *vertices) {
 #ifdef PORT_EXP_NOVTX
     return;
@@ -1518,46 +1556,63 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                 calculate_normal_dir(&lookat_x, rsp.current_lookat_coeffs[0]);
                 calculate_normal_dir(&lookat_y, rsp.current_lookat_coeffs[1]);
                 rsp.lights_changed = false;
+                gfx_vfpu_lights_refresh();
+                // calculate_normal_dir may have used the VFPU; reload the
+                // matrices (only now: this used to run for every lit vertex).
+                __asm__ volatile (
+                    "lv.q  c700,  0 + %0\n" "lv.q  c710, 16 + %0\n" "lv.q  c720, 32 + %0\n" "lv.q  c730, 48 + %0\n"
+                    "lv.q  c400,  0 + %1\n" "lv.q  c410, 16 + %1\n" "lv.q  c420, 32 + %1\n" "lv.q  c430, 48 + %1\n"
+                    :: "m"(*rsp.MP_matrix), "m"(*rsp.modelview_matrix_stack[rsp.modelview_matrix_stack_size - 1])
+                );
             }
-            // calculate_normal_dir may have used the VFPU; reload the matrices.
-            __asm__ volatile (
-                "lv.q  c700,  0 + %0\n" "lv.q  c710, 16 + %0\n" "lv.q  c720, 32 + %0\n" "lv.q  c730, 48 + %0\n"
-                "lv.q  c400,  0 + %1\n" "lv.q  c410, 16 + %1\n" "lv.q  c420, 32 + %1\n" "lv.q  c430, 48 + %1\n"
-                :: "m"(*rsp.MP_matrix), "m"(*rsp.modelview_matrix_stack[rsp.modelview_matrix_stack_size - 1])
-            );
-            
-            unsigned int r = rsp.current_lights[rsp.current_num_lights - 1].col[0];
-            unsigned int g = rsp.current_lights[rsp.current_num_lights - 1].col[1];
-            unsigned int b = rsp.current_lights[rsp.current_num_lights - 1].col[2];
-            
-            for (int i = 0; i < rsp.current_num_lights - 1; i++) {
-                float intensity = 0;
-                intensity += vn->n[0] * rsp.current_lights_coeffs[i][0];
-                intensity += vn->n[1] * rsp.current_lights_coeffs[i][1];
-                intensity += vn->n[2] * rsp.current_lights_coeffs[i][2];
-                intensity /= 127.0f;
-                if (intensity > 0.0f) {
-                    r += intensity * rsp.current_lights[i].col[0];
-                    g += intensity * rsp.current_lights[i].col[1];
-                    b += intensity * rsp.current_lights[i].col[2];
+
+            /* colour = min(255, ambient + sum(max(0, n . L) * light colour)):
+             * one vdot per light (the /127 is folded into L), no divide. */
+            {
+                float nrm[4] __attribute__((aligned(16))) = { vn->n[0], vn->n[1], vn->n[2], 0.0f };
+                int lit[4] __attribute__((aligned(16)));
+                int li;
+                __asm__ volatile (
+                    "lv.q   c500, %0\n"      // the normal
+                    "lv.q   c510, %1\n"      // accumulator = ambient
+                    "vzero.s s533\n"
+                    :: "m"(*nrm), "m"(*vl_amb)
+                );
+                for (li = 0; li < rsp.current_num_lights - 1 && li < MAX_LIGHTS; li++) {
+                    __asm__ volatile (
+                        "lv.q   c600, %0\n"
+                        "lv.q   c610, %1\n"
+                        "vdot.q s530, c500, c600\n"
+                        "vmax.s s530, s530, s533\n"
+                        "vscl.q c610, c610, s530\n"
+                        "vadd.q c510, c510, c610\n"
+                        :: "m"(*vl_coef[li]), "m"(*vl_col[li])
+                    );
                 }
-            }
-            
-            d->color.r = r > 255 ? 255 : r;
-            d->color.g = g > 255 ? 255 : g;
-            d->color.b = b > 255 ? 255 : b;
-            
-            if (rsp.geometry_mode & G_TEXTURE_GEN) {
-                float dotx = 0, doty = 0;
-                dotx += vn->n[0] * rsp.current_lookat_coeffs[0][0];
-                dotx += vn->n[1] * rsp.current_lookat_coeffs[0][1];
-                dotx += vn->n[2] * rsp.current_lookat_coeffs[0][2];
-                doty += vn->n[0] * rsp.current_lookat_coeffs[1][0];
-                doty += vn->n[1] * rsp.current_lookat_coeffs[1][1];
-                doty += vn->n[2] * rsp.current_lookat_coeffs[1][2];
-                
-                U = (int32_t)((dotx / 127.0f + 1.0f) / 4.0f * rsp.texture_scaling_factor.s);
-                V = (int32_t)((doty / 127.0f + 1.0f) / 4.0f * rsp.texture_scaling_factor.t);
+                __asm__ volatile (
+                    "lv.q   c600, %1\n"
+                    "vmin.q c510, c510, c600\n"
+                    "vf2iz.q c510, c510, 0\n"
+                    "sv.q   c510, %0\n"
+                    : "=m"(*lit) : "m"(*vl_255)
+                );
+                d->color.r = (uint8_t) lit[0];
+                d->color.g = (uint8_t) lit[1];
+                d->color.b = (uint8_t) lit[2];
+
+                if (rsp.geometry_mode & G_TEXTURE_GEN) {
+                    float dots[4] __attribute__((aligned(16)));
+                    __asm__ volatile (
+                        "lv.q   c600, %1\n"
+                        "lv.q   c610, %2\n"
+                        "vdot.q s520, c500, c600\n"
+                        "vdot.q s521, c500, c610\n"
+                        "sv.q   c520, %0\n"
+                        : "=m"(*dots) : "m"(*vl_look[0]), "m"(*vl_look[1])
+                    );
+                    U = (int32_t)((dots[0] + 1.0f) * 0.25f * rsp.texture_scaling_factor.s);
+                    V = (int32_t)((dots[1] + 1.0f) * 0.25f * rsp.texture_scaling_factor.t);
+                }
             }
         } else {
             d->color.r = v->cn[0];
@@ -2128,14 +2183,42 @@ static void gfx_emit_triangle(const struct LoadedVertex *a, const struct LoadedV
 #define GE_GUARD_NDC 3.0f
 #endif
 
+/* Homogeneous winding of a triangle whose vertices all have w > 0 (or mixed
+ * signs, which the caller corrects): the sign of
+ *   (x1 w2 - x2 w1)(y3 w2 - y2 w3) - (y1 w2 - y2 w1)(x3 w2 - x2 w3).
+ * Two scaled differences and one 2x2 determinant on the VFPU. */
+static inline float gfx_winding_cross(const struct LoadedVertex *c1, const struct LoadedVertex *c2, const struct LoadedVertex *c3) {
+    float out[4] __attribute__((aligned(16)));
+    __asm__ volatile (
+        "lv.q   c000, 16 + %1\n"          // x1 y1 z1 w1
+        "lv.q   c010, 16 + %2\n"          // x2 y2 z2 w2
+        "lv.q   c020, 16 + %3\n"          // x3 y3 z3 w3
+        "vscl.q c100, c000, s013\n"       // v1 * w2
+        "vscl.q c110, c010, s003\n"       // v2 * w1
+        "vsub.q c100, c100, c110\n"       // (dx1, dy1, ..)
+        "vscl.q c120, c020, s013\n"       // v3 * w2
+        "vscl.q c130, c010, s023\n"       // v2 * w3
+        "vsub.q c120, c120, c130\n"       // (dx2, dy2, ..)
+        "vdet.p s030, c100, c120\n"       // dx1*dy2 - dy1*dx2
+        "sv.q   c030, %0\n"
+        : "=m"(*out) : "m"(*c1), "m"(*c2), "m"(*c3)
+    );
+    return out[0];
+}
+
 static inline void nclip_lerp(struct LoadedVertex *o, const struct LoadedVertex *a, const struct LoadedVertex *b, float t) {
-    o->x = a->x + t * (b->x - a->x);
-    o->y = a->y + t * (b->y - a->y);
-    o->z = a->z + t * (b->z - a->z);
-    o->_x = a->_x + t * (b->_x - a->_x);
-    o->_y = a->_y + t * (b->_y - a->_y);
-    o->_z = a->_z + t * (b->_z - a->_z);
-    o->_w = a->_w + t * (b->_w - a->_w);
+    /* The object-space and the clip-space position quads in one go each
+     * (LoadedVertex is 16-aligned: x y z w | _x _y _z _w | u v colour flags). */
+    float tq[4] __attribute__((aligned(16))) = { t, 0.0f, 0.0f, 0.0f };
+    __asm__ volatile (
+        "lv.q   c000, %3\n"
+        "lv.q   c010,  0 + %1\n" "lv.q   c020,  0 + %2\n"
+        "lv.q   c100, 16 + %1\n" "lv.q   c110, 16 + %2\n"
+        "vsub.q c020, c020, c010\n" "vscl.q c020, c020, s000\n" "vadd.q c010, c010, c020\n"
+        "vsub.q c110, c110, c100\n" "vscl.q c110, c110, s000\n" "vadd.q c100, c100, c110\n"
+        "sv.q   c010,  0 + %0\n" "sv.q   c100, 16 + %0\n"
+        : "=m"(*o) : "m"(*a), "m"(*b), "m"(*tq)
+    );
     o->u = a->u + t * (b->u - a->u);
     o->v = a->v + t * (b->v - a->v);
     o->color.r = (uint8_t) (a->color.r + t * (b->color.r - a->color.r));
@@ -2211,9 +2294,7 @@ static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct Loade
     // Back-face cull the clipped polygon (every vertex has w > 0 => exact winding).
     uint32_t cull = rsp.geometry_mode & G_CULL_BOTH;
     if (cull) {
-        float w1 = out[0]._w, w2 = out[1]._w, w3 = out[2]._w;
-        float cross = (out[0]._x * w2 - out[1]._x * w1) * (out[2]._y * w2 - out[1]._y * w3)
-                    - (out[0]._y * w2 - out[1]._y * w1) * (out[2]._x * w2 - out[1]._x * w3);
+        float cross = gfx_winding_cross(&out[0], &out[1], &out[2]);
         if (cull == G_CULL_FRONT && cross <= 0.0f) return;
         if (cull == G_CULL_BACK && cross >= 0.0f) return;
         if ((cull & G_CULL_BOTH) == G_CULL_BOTH) return;
@@ -2396,12 +2477,8 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
         // w > 0, so the sign of the homogeneous cross product is exact.  The
         // differences of x/w share the positive denominator w1*w2*w2*w3.
         const struct LoadedVertex *c1 = clipped_vertices[0], *c2 = clipped_vertices[1], *c3 = clipped_vertices[2];
-        float w1 = c1->_w, w2 = c2->_w, w3 = c3->_w;
-        float dx1 = c1->_x * w2 - c2->_x * w1;
-        float dy1 = c1->_y * w2 - c2->_y * w1;
-        float dx2 = c3->_x * w2 - c2->_x * w3;
-        float dy2 = c3->_y * w2 - c2->_y * w3;
-        float cross = dx1 * dy2 - dy1 * dx2;
+        float w1 = c1->_w, w3 = c3->_w;
+        float cross = gfx_winding_cross(c1, c2, c3);
         if (w1 * w3 < 0.0f) {
             cross = -cross;
         }
@@ -3480,6 +3557,66 @@ float time_first_200;
 int total_frame_counter;
 int frame_counter;
 
+#ifdef PORT_GFX_DEBUG
+/* Debug builds: check every VFPU routine of max_fps_experiments against its
+ * scalar form once at boot and log the worst difference. */
+static float vt_absf(float v) { return v < 0.0f ? -v : v; }
+static void gfx_vfpu_selftest(void) {
+    extern void mtxf_multiplication(float dest[4][4], float l[4][4], float r[4][4]);
+    struct LoadedVertex va, vb, vc, vo; /* on the stack: the asm's "16 + %1" operands need a register base */
+    memset(&va, 0, sizeof(va)); memset(&vb, 0, sizeof(vb)); memset(&vc, 0, sizeof(vc)); memset(&vo, 0, sizeof(vo));
+    float err, worst;
+    int i, j, k;
+    /* lerp */
+    va.x = 10; va.y = -20; va.z = 30; va.w = 1; va._x = 1.5f; va._y = -2.5f; va._z = 3.5f; va._w = 4.5f;
+    vb.x = -7; vb.y = 9; vb.z = 100; vb.w = 1; vb._x = -8.25f; vb._y = 6; vb._z = -1; vb._w = 0.75f;
+    va.u = 100; va.v = 200; vb.u = 300; vb.v = -50; va.color = (struct RGBA){ 10, 20, 30, 40 }; vb.color = (struct RGBA){ 250, 0, 90, 255 };
+    nclip_lerp(&vo, &va, &vb, 0.3f);
+    worst = vt_absf(vo.x - (va.x + 0.3f * (vb.x - va.x)));
+    err = vt_absf(vo.z - (va.z + 0.3f * (vb.z - va.z))); if (err > worst) worst = err;
+    err = vt_absf(vo._y - (va._y + 0.3f * (vb._y - va._y))); if (err > worst) worst = err;
+    err = vt_absf(vo._w - (va._w + 0.3f * (vb._w - va._w))); if (err > worst) worst = err;
+    port_log("vfpu selftest: lerp worst error %g (u %g colour r %d)\n", worst, vo.u, vo.color.r);
+    /* winding */
+    vc._x = 3; vc._y = 7; vc._z = 0; vc._w = 2.5f;
+    {
+        float w1 = va._w, w2 = vb._w, w3 = vc._w;
+        float ref = (va._x * w2 - vb._x * w1) * (vc._y * w2 - vb._y * w3) - (va._y * w2 - vb._y * w1) * (vc._x * w2 - vb._x * w3);
+        float got = gfx_winding_cross(&va, &vb, &vc);
+        port_log("vfpu selftest: winding %g, scalar %g\n", got, ref);
+    }
+    /* game matrix product */
+    {
+        float l[4][4], r[4][4], got[4][4];
+        for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) { l[i][j] = (i * 4 + j) * 0.37f - 2.0f; r[i][j] = (j * 4 - i) * 1.13f + 0.5f; }
+        mtxf_multiplication(got, l, r);
+        worst = 0;
+        for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) {
+            float ref = 0;
+            for (k = 0; k < 4; k++) ref += l[i][k] * r[k][j];
+            err = vt_absf(got[i][j] - ref); if (err > worst) worst = err;
+        }
+        port_log("vfpu selftest: mtxf_multiplication worst error %g\n", worst);
+    }
+    /* fixed-point matrix load */
+    {
+        int32_t m[16];
+        float ref[4][4];
+        for (i = 0; i < 16; i++) { ref[i / 4][i % 4] = (i * 1234567 - 9000000) / 65536.0f; }
+        for (i = 0; i < 4; i++) for (j = 0; j < 4; j += 2) {
+            int32_t a0 = (int32_t) (ref[i][j] * 65536.0f), a1 = (int32_t) (ref[i][j + 1] * 65536.0f);
+            m[i * 2 + j / 2] = (int32_t) (((uint32_t) a0 & 0xffff0000u) | (((uint32_t) a1 >> 16) & 0xffffu));
+            m[8 + i * 2 + j / 2] = (int32_t) ((((uint32_t) a0 & 0xffffu) << 16) | ((uint32_t) a1 & 0xffffu));
+        }
+        rsp.modelview_matrix_stack_size = 1;
+        gfx_sp_matrix(G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH, m);
+        worst = 0;
+        for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) { err = vt_absf(rsp.modelview_matrix_stack[0][i][j] - ref[i][j]); if (err > worst) worst = err; }
+        port_log("vfpu selftest: fixed-point matrix load worst error %g\n", worst);
+    }
+}
+#endif
+
 void gfx_init(struct GfxWindowManagerAPI *wapi, struct GfxRenderingAPI *rapi, const char *game_name, bool start_in_fullscreen) {
     gfx_wapi = wapi;
     gfx_rapi = rapi;
@@ -3528,6 +3665,10 @@ void gfx_init(struct GfxWindowManagerAPI *wapi, struct GfxRenderingAPI *rapi, co
         gfx_lookup_or_create_shader_program(precomp_shaders[i]);
     }
 
+#ifdef PORT_GFX_DEBUG
+    memcpy(rsp.P_matrix, identity_matrix, sizeof(identity_matrix));
+    gfx_vfpu_selftest(); // leaves the matrix state to the resets below
+#endif
     memcpy(rsp.P_matrix, identity_matrix, sizeof(identity_matrix));
     memcpy(rsp.modelview_matrix_stack[0], identity_matrix, sizeof(identity_matrix));
 

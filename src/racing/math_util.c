@@ -991,6 +991,27 @@ UNUSED void func_802B6D58(Mat4 arg0, Vec3f arg1, Vec3f arg2) {
  * @param mtxLeft  Left matrix in product
  * @param mtxRight Right matrix to product
  */
+#ifdef TARGET_PSP
+/* One vmmul on the VFPU.  Every caller builds a matrix for the display list
+ * (the train, the paddle boat, the skybox look-at): nothing the simulation
+ * reads, so the low-bit differences from the FPU version below cannot reach
+ * physics, ghosts or the ad hoc lockstep.  Unaligned loads (the game's Mat4s
+ * are not 16-aligned); the result goes through an aligned temporary because
+ * unaligned VFPU stores are unreliable on the PSP-1000. */
+void mtxf_multiplication(Mat4 dest, Mat4 mtxLeft, Mat4 mtxRight) {
+    float product[4][4] __attribute__((aligned(16)));
+    __asm__ volatile (
+        ".set push\n" ".set noreorder\n"
+        "ulv.q  R000,  0 + %1\n" "ulv.q  R001, 16 + %1\n" "ulv.q  R002, 32 + %1\n" "ulv.q  R003, 48 + %1\n"
+        "ulv.q  R100,  0 + %2\n" "ulv.q  R101, 16 + %2\n" "ulv.q  R102, 32 + %2\n" "ulv.q  R103, 48 + %2\n"
+        "vmmul.q M200, M000, M100\n"
+        "sv.q   R200,  0 + %0\n" "sv.q   R201, 16 + %0\n" "sv.q   R202, 32 + %0\n" "sv.q   R203, 48 + %0\n"
+        ".set pop\n"
+        : "=m"(*product) : "m"(*mtxLeft), "m"(*mtxRight) : "memory"
+    );
+    mtxf_copy_n_element((s32*) dest, (s32*) product, 16);
+}
+#else
 void mtxf_multiplication(Mat4 dest, Mat4 mtxLeft, Mat4 mtxRight) {
     Mat4 product;
     product[0][0] = (mtxLeft[0][0] * mtxRight[0][0]) + (mtxLeft[0][1] * mtxRight[1][0]) +
@@ -1027,6 +1048,7 @@ void mtxf_multiplication(Mat4 dest, Mat4 mtxLeft, Mat4 mtxRight) {
                     (mtxLeft[3][2] * mtxRight[2][3]) + (mtxLeft[3][3] * mtxRight[3][3]);
     mtxf_copy_n_element((s32*) dest, (s32*) product, 16);
 }
+#endif
 
 /**
  * Convert float matrix 'src' to fixed point matrix 'dest'.
