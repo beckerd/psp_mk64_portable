@@ -8,8 +8,9 @@ Not releases: builds handed out for testing.
   ROM there). Every PSP needs this same build: different builds now refuse
   each other. `ADHOC_TEST.txt` inside says what to try and which logs to send
   back.
-- `mk64-fps-optimized-test.zip` (2026-09-20): experimental "fps-optimized" build
-  from the `max_fps_experiments` branch (commit aa5d809): 60 fps in 1P races,
+- `mk64-fps-optimized-test.zip` (2026-09-20, build 2): experimental "fps-optimized" build
+  from the `max_fps_experiments` branch (commit 9849e20; build 2 addresses a rare
+  2-3 s freeze mid-race): 60 fps in 1P races,
   sound mixing on the Media Engine, a faster renderer. It installs NEXT TO the
   normal copy: unzip and copy the `MK64PortableFPS` folder to `ms0:/PSP/GAME/`,
   and put your ROM in it too. Keep `mk64k.prx` beside the EBOOT. `FPS_TEST.txt`
