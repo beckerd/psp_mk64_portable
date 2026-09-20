@@ -1545,6 +1545,14 @@ struct ShaderProgram {
 #ifndef GE_GUARD_NDC
 #define GE_GUARD_NDC 3.0f /* see gfx_ge_tl_near_clip; gfx_sp_vertex's VFPU code has the same 3.0 as an immediate */
 #endif
+/* The guard band in force: GE_GUARD_NDC while the viewport is the whole screen
+ * (the GE's scissor is the screen: nothing can land outside it), 1.0 for any
+ * smaller view -- a split-screen quadrant, the results screen's replays --
+ * whose triangles are then clipped to the viewport on the CPU, as every build
+ * before the wide guard band did.  On hardware, leaving those views to the
+ * scissor first let a replay draw across its neighbour, and the scissor fix for
+ * that came with garbled textures on the same screen (never in PPSSPP). */
+static float ge_guard_ndc = GE_GUARD_NDC;
 extern float gPortDrawDist;
 /* VFPU lighting (max_fps_experiments).  Refreshed when the lights change: the
  * light directions with the per-vertex /127 folded in, the light colours, the
@@ -1784,7 +1792,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                  * band (its "any" bit), and vrcp replaces the divide for the
                  * projected position, stored straight into the vertex. */
                 uint32_t cc_edge = 0, cc_guard = 0;
-                if (gPortVfpuOutcodes) {
+                if (gPortVfpuOutcodes && ge_guard_ndc == GE_GUARD_NDC) { /* the VFPU code has 3.0 built in */
                     /* data/vfpuoc: the flags from the VFPU compare's condition
                      * register.  Pixel-identical in PPSSPP, but on hardware the
                      * first clean pictures showed ground triangles vanishing, and
@@ -1808,7 +1816,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                     );
                 } else {
                     float px = proj_vec[0], py = proj_vec[1], pw = proj_vec[3];
-                    float gw = GE_GUARD_NDC * pw;
+                    float gw = ge_guard_ndc * pw;
                     if (px > pw) cc_edge |= 1;
                     if (py > pw) cc_edge |= 2;
                     if (-px > pw) cc_edge |= 4;
@@ -2477,7 +2485,7 @@ static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct Loade
     //   clip.x <=  G*w,  clip.x >= -G*w,  clip.y <=  G*w,  clip.y >= -G*w
     {
         const float D = 1.0f - GE_DEPTH_EPS;
-        const float G = GE_GUARD_NDC;
+        const float G = ge_guard_ndc;
         static const struct { uint32_t bit; float ax, ay, az; int guard; } planes[6] = {
             { VOC_ZNEAR, 0.0f, 0.0f, 1.0f, 0 }, { VOC_ZFAR, 0.0f, 0.0f, -1.0f, 0 },
             { VOC_G_RIGHT, -1.0f, 0.0f, 0.0f, 1 }, { VOC_G_LEFT, 1.0f, 0.0f, 0.0f, 1 },
@@ -2969,6 +2977,8 @@ static void gfx_calc_and_set_viewport(const Vp_t *viewport) {
     rdp.viewport.y = y;
     rdp.viewport.width = width;
     rdp.viewport.height = height;
+    /* whole screen (within a pixel or two of rounding), or a smaller view? */
+    ge_guard_ndc = (width >= (float) gfx_current_dimensions.width - 2.0f && height >= (float) gfx_current_dimensions.height - 2.0f) ? GE_GUARD_NDC : 1.0f;
     
     rdp.viewport_or_scissor_changed = true;
     tri_state.valid = false;

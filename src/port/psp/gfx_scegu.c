@@ -697,7 +697,7 @@ static void gfx_scegu_set_zmode_decal(bool zmode_decal) {
 static int vp_rect[4] = { 0, 0, SCR_WIDTH, SCR_HEIGHT }, sc_rect[4] = { 0, 0, SCR_WIDTH, SCR_HEIGHT }; /* x0 y0 x1 y1, GE coordinates */
 static int sc_empty; /* the scissor and the viewport do not overlap: draw nothing */
 static unsigned int sc_empty_skips, sc_empty_sets; /* logged with the display-list line: does this case really happen? */
-static void gfx_scegu_apply_scissor(void) {
+__attribute__((unused)) static void gfx_scegu_apply_scissor(void) {
     int x0 = vp_rect[0] > sc_rect[0] ? vp_rect[0] : sc_rect[0];
     int y0 = vp_rect[1] > sc_rect[1] ? vp_rect[1] : sc_rect[1];
     int x1 = vp_rect[2] < sc_rect[2] ? vp_rect[2] : sc_rect[2];
@@ -721,15 +721,19 @@ static void gfx_scegu_apply_scissor(void) {
     sceGuScissor(x0, y0, x1, y1);
 }
 
+/* Both setters are what they were on every build that showed clean textures on
+ * hardware: each sets the GE scissor to its own rectangle.  The overlap version
+ * above (gfx_scegu_apply_scissor) is kept for reference but not used: since it
+ * went in, the results screen's replays drew with garbled textures on the PSP,
+ * by a mechanism PPSSPP does not show.  Views smaller than the screen are kept
+ * inside their viewport by CPU clipping instead (gfx_pc.c ge_guard_ndc). */
 static void gfx_scegu_set_viewport(int x, int y, int width, int height) {
     sceGuViewport(2048 - (SCR_WIDTH / 2) + x + (width / 2), 2048 + (SCR_HEIGHT / 2) - y - (height / 2), width, height);
-    vp_rect[0] = x; vp_rect[1] = SCR_HEIGHT - y - height; vp_rect[2] = x + width; vp_rect[3] = SCR_HEIGHT - y;
-    gfx_scegu_apply_scissor();
+    sceGuScissor(x, SCR_HEIGHT - y - height, x + width, SCR_HEIGHT - y);
 }
 
 static void gfx_scegu_set_scissor(int x, int y, int width, int height) {
-    sc_rect[0] = x; sc_rect[1] = SCR_HEIGHT - y - height; sc_rect[2] = x + width; sc_rect[3] = SCR_HEIGHT - y;
-    gfx_scegu_apply_scissor();
+    sceGuScissor(x, SCR_HEIGHT - y - height, x + width, SCR_HEIGHT - y);
 }
 
 static void gfx_scegu_set_use_alpha(bool use_alpha) {
