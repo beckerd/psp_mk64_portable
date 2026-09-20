@@ -2119,8 +2119,13 @@ static void gfx_emit_triangle(const struct LoadedVertex *a, const struct LoadedV
  * backdrop behind the kart" bug only appeared on-device.  So we clip the
  * near-straddling triangle against the near plane AND the four screen-side
  * guard planes -- every emitted vertex then projects on-screen. */
+/* The GE rasterises in a 4096x4096 space centred on the 480x272 screen, i.e.
+ * up to NDC +-8.5 in x and +-15 in y, and scissors to the screen itself: a
+ * triangle that merely crosses a screen edge needs no CPU clipping.  3.0 keeps
+ * a wide margin inside that band (it was 1.0: every edge triangle paid for the
+ * 7-plane clipper below).  max_fps_experiments: check on hardware. */
 #ifndef GE_GUARD_NDC
-#define GE_GUARD_NDC 1.0f
+#define GE_GUARD_NDC 3.0f
 #endif
 
 static inline void nclip_lerp(struct LoadedVertex *o, const struct LoadedVertex *a, const struct LoadedVertex *b, float t) {
@@ -2356,13 +2361,22 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     // triangle through the guard-band clipper.  Perspective only.
     if (!ge_needs_clip && (rsp.is_persp)) {
         const struct LoadedVertex *gv[3] = { v1, v2, v3 };
-        int gk;
+        int gk, off_screen = 0xF;
         for (gk = 0; gk < 3; gk++) {
-            float gw = GE_GUARD_NDC * gv[gk]->_w;
+            float sw = gv[gk]->_w; // > 0 here: no vertex is flagged at/behind the near plane
+            float gw = GE_GUARD_NDC * sw;
+            int out = 0;
+            if (gv[gk]->_x > sw) out |= 1;
+            if (gv[gk]->_x < -sw) out |= 2;
+            if (gv[gk]->_y > sw) out |= 4;
+            if (gv[gk]->_y < -sw) out |= 8;
+            off_screen &= out;
             if (gv[gk]->_x > gw || gv[gk]->_x < -gw || gv[gk]->_y > gw || gv[gk]->_y < -gw) {
                 ge_needs_clip = true;
-                break;
             }
+        }
+        if (off_screen != 0) {
+            return; // all three beyond the same screen edge: nothing of it is visible
         }
     }
 
