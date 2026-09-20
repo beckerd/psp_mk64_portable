@@ -646,15 +646,24 @@ static int hud_class(float x0, float x1) {
     hud_prev_class = cls;
     return cls;
 }
-s32 gPortExpMode;
+/* -DPORT_EXP builds: main.c's hardware cost breakdown (data/exp) switches
+ * renderer stages off in turn -- 1 = no triangles, 2 = no vertices either, 3 =
+ * the display list is not run, 4 = triangles culled and clipped but not drawn,
+ * 5 = no texture imports, 6 = batches through the staging copy, 7 = vertex
+ * flags from C compares -- and counts events in the normal picture: [0]
+ * triangles in, [1] rejected, [2] back-face culled, [3] to the CPU clipper, [4]
+ * emitted, [5] state rebuilds, [6] texture imports, [7] imports that uploaded,
+ * [8] batches flushed, [9] vertices.  Nothing of it exists in other builds. */
 s32 gPortVfpuOutcodes; /* set by the boot self-test: per-vertex flags from the VFPU compare instead of C compares */
-s32 gPortOldClip; /* data/oldclip (main.c): the clipper runs all seven planes again, for comparing on hardware */
-/* data/exp event counts, per report: [0] triangles in, [1] rejected by outcode
- * or near/far flags, [2] back-face culled, [3] sent to the CPU clipper, [4]
- * emitted, [5] state rebuilds, [6] texture imports, [7] imports that uploaded
- * (cache miss or changed contents), [8] batches flushed, [9] vertices. */
+#ifdef PORT_EXP
+s32 gPortExpMode;
 u32 gPortExpCount[10];
-#define EXPCOUNT(i, n) do { if (gPortExpMode == 0) gPortExpCount[i] += (n); } while (0) /* the normal picture only */
+#define EXP_MODE(n) (gPortExpMode == (n))
+#define EXPCOUNT(i, n) do { if (EXP_MODE(0)) gPortExpCount[i] += (n); } while (0)
+#else
+#define EXP_MODE(n) 0
+#define EXPCOUNT(i, n) ((void) 0)
+#endif
 static float ge_last_mp[4][4];
 static uint32_t ge_list_used; /* bytes written to the GE list since the last (re)start */
 #ifndef GE_LIST_RECYCLE
@@ -903,30 +912,8 @@ extern char __assets_start[], __assets_end[]; // linker: the ROM-derived asset r
 
 /* Texels the game never rewrites: code/data of the executable, or the asset
  * region (ROM blobs, torch assets), which the linker places AFTER .bss. */
-/* port.h: the course texture block and, inside it, the stadium-screen tiles. */
-static const char *course_tex_lo, *course_tex_hi, *fb_tile_lo, *fb_tile_hi;
-s32 gPortCourseStatic; /* data/coursestatic (main.c) */
-static int tex_cache_flush_pending;
-void port_course_textures_loaded(void *start, u32 size) {
-    course_tex_lo = (const char *) start;
-    course_tex_hi = course_tex_lo + size;
-    fb_tile_lo = fb_tile_hi = NULL;
-    tex_cache_flush_pending = 1; /* the same addresses are about to mean other texels */
-}
-void port_fb_tile_note(void *target, u32 bytes) {
-    const char *t = (const char *) target;
-    if (fb_tile_lo == NULL || t < fb_tile_lo) fb_tile_lo = t;
-    if (fb_tile_hi == NULL || t + bytes > fb_tile_hi) fb_tile_hi = t + bytes;
-}
 static inline bool gfx_is_static_memory(const void *p) {
     const char *c = (const char *) p;
-    /* Off unless data/coursestatic: on hardware this saved nothing measurable,
-     * and after a full race the results screen's replays drew with garbage
-     * texels (not reproducible in PPSSPP) -- the one recent change that alters
-     * what the texture cache hands back. */
-    if (gPortCourseStatic && c >= course_tex_lo && c < course_tex_hi) {
-        return !(c >= fb_tile_lo && c < fb_tile_hi);
-    }
     return (c >= _ftext && c < _fbss) || (c >= __assets_start && c < __assets_end);
 }
 
@@ -1344,7 +1331,7 @@ static void import_texture_any(int tile, uint8_t mirror) {
 
 static void import_texture(int tile) {
     EXPCOUNT(6, 1);
-    if (gPortExpMode == 5 && rendering_state.textures[tile] != NULL) return; /* keep whatever is bound */
+    if (EXP_MODE(5) && rendering_state.textures[tile] != NULL) return; /* keep whatever is bound */
     uint8_t fmt = rdp.texture_tile.fmt;
     uint8_t siz = rdp.texture_tile.siz;
     // Reject a degenerate render-tile size (e.g. lrt < ult -> height 0, seen on
@@ -1590,7 +1577,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
     return;
 #endif
     EXPCOUNT(9, (u32) n_vertices);
-    if (gPortExpMode == 2) return;
+    if (EXP_MODE(2)) return;
     float temp_vec[4] __attribute__((aligned(16)));
     float proj_vec[4] __attribute__((aligned(16)));
     float view_vec[4] __attribute__((aligned(16)));
@@ -1793,7 +1780,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                  * band (its "any" bit), and vrcp replaces the divide for the
                  * projected position, stored straight into the vertex. */
                 uint32_t cc_edge = 0, cc_guard = 0;
-                if (gPortVfpuOutcodes && gPortExpMode != 7 && ge_guard_ndc == GE_GUARD_NDC) { /* the VFPU code has 3.0 built in */
+                if (gPortVfpuOutcodes && !EXP_MODE(7) && ge_guard_ndc == GE_GUARD_NDC) { /* the VFPU code has 3.0 built in */
                     /* The flags from the VFPU compare's condition register.  On
                      * hardware mfvc straight after vcmp returned the previous
                      * compare's bits (ground triangles vanished); with a vsync
@@ -1840,10 +1827,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                 {
                     float wz2 = (1.0f - GE_DEPTH_EPS) * proj_vec[3];
                     uint32_t oc = (cc_edge & 0xF) | (cc_guard & 0xF) << 4;
-                    if (gPortOldClip && (proj_vec[3] < GE_TL_NEAR || proj_vec[2] + wz2 < 0.0f || wz2 - proj_vec[2] < 0.0f)) {
-                        oc &= ~0xFu; /* data/oldclip: screen-edge rejects only for vertices inside the depth range */
-                    }
-                    /* Otherwise the edge bits count for any vertex: a half-space
+                    /* The edge bits count for any vertex: a half-space
                      * test in clip space holds for any w, and the decision is
                      * made on the CPU from the same numbers on the PSP and in
                      * PPSSPP -- which shows no missing ground -- so it cannot be
@@ -2219,11 +2203,11 @@ static void gfx_tri_rebuild_state(struct LoadedVertex *v1) {
 
 
 /* Emit one vertex of the current triangle into the GE buffer. */
-int gExpDirectEmitOff; /* data/exp mode 6: the old staging-buffer copy, for comparison */
+int gPortNoDirectEmit; /* data/nodirect (main.c): batches through the staging copy */
 static inline void gfx_emit_vertex(const struct LoadedVertex *cv, uint32_t cc_id, int lod) {
     psp_fast_t *out;
     if (buf_num_vert == 0) { /* a new batch */
-        void *direct = gExpDirectEmitOff ? NULL : gfx_scegu_batch_begin(sizeof(buf_vbo_static));
+        void *direct = gPortNoDirectEmit ? NULL : gfx_scegu_batch_begin(sizeof(buf_vbo_static));
         buf_vbo = direct != NULL ? (psp_fast_t *) direct : buf_vbo_static;
     }
     out = &buf_vbo[buf_num_vert];
@@ -2273,7 +2257,7 @@ static inline void gfx_emit_vertex(const struct LoadedVertex *cv, uint32_t cc_id
 #define GFX_MAX_UV_REPEATS 16.0f
 static void gfx_emit_triangle(const struct LoadedVertex *a, const struct LoadedVertex *b, const struct LoadedVertex *c, uint32_t cc_id, int lod, int depth) {
     EXPCOUNT(4, 1);
-    if (gPortExpMode == 4) return;
+    if (EXP_MODE(4)) return;
     if (tri_state.use_texture && depth < 0) { // subdivision disabled: does not fix distant-texture aliasing (needs mipmaps)
         float umin = a->u, umax = a->u, vmin = a->v, vmax = a->v;
         if (b->u < umin) umin = b->u; if (b->u > umax) umax = b->u;
@@ -2453,8 +2437,8 @@ static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct Loade
      * triangles come through here on DK's Jungle Parkway. */
     uint32_t m = (a->oc | b->oc | c->oc) & VOC_CLIP;
     int n = 3, i;
-    if (rsp.is_persp == 0 || m == 0 || gPortOldClip) {
-        m = VOC_CLIP; /* no outcodes for this vertex kind (or data/oldclip): every plane, as before */
+    if (rsp.is_persp == 0 || m == 0) {
+        m = VOC_CLIP; /* no outcodes for this vertex kind: every plane */
     }
     /* The two depth planes always run, as they always did: the GE drops a whole
      * triangle if one vertex is a rounding error outside its depth range, and a
@@ -2531,7 +2515,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
 #ifdef PORT_EXP_NOTRI
     return;
 #endif
-    if (gPortExpMode == 1 || gPortExpMode == 2) return;
+    if (EXP_MODE(1) || EXP_MODE(2)) return;
     EXPCOUNT(0, 1);
 #ifdef PORT_PROFILE_DL
     uint32_t _pt0 = port_time_us();
@@ -3902,8 +3886,7 @@ static void gfx_vfpu_outcode_selftest(void) {
             if ((e2 & 0xF) != ce || (g2 & 0xF) != cg) bad_sync++;
         }
         if ((e & 0xF) != ce || (g & 0xF) != cg) {
-            bad++;
-            port_log("vfpu outcodes: MISMATCH for (%g %g %g): edge %X vs C %X, guard %X vs C %X\n", px, py, pw, (unsigned) (e & 0xF), (unsigned) ce, (unsigned) (g & 0xF), (unsigned) cg);
+            bad++; /* expected on a PSP: the plain read returns the previous compare's bits (15 of 16 here) */
         }
         if (pw > 0.0f) {
             float err = rq[0] - px / pw;
@@ -4024,10 +4007,7 @@ void gfx_start_frame(void) {
     gfx_flush_index = 0;
     // Recycle the texture arena between frames (the previous frame's display
     // list has fully executed) rather than in the middle of one.
-    if (tex_cache_flush_pending) {
-        tex_cache_flush_pending = 0;
-        gfx_texture_cache_reset(false); /* the course texture block changed hands (port_course_textures_loaded) */
-    } else if (texman_usage_percent() > 85) {
+    if (texman_usage_percent() > 85) {
         port_log("gfx: frame %u arena reset at %u%% (%u mid-frame resets last frame)\n", (unsigned) gfx_frame_counter, (unsigned) texman_usage_percent(), (unsigned) gfx_midframe_resets);
         gfx_texture_cache_reset(false);
     }
@@ -4051,7 +4031,7 @@ void gfx_run(Gfx *commands) {
     //double t0 = gfx_wapi->get_time();
     unsigned int t0 = sceKernelLibcClock();
     gfx_rapi->start_frame();
-    if (gPortExpMode != 3) gfx_run_dl(commands);
+    if (!EXP_MODE(3)) gfx_run_dl(commands);
     if (gfx_trace_frames > 0) {
         gfx_trace_frames--;
         port_log("dl done\n");

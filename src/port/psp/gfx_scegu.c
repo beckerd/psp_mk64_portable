@@ -688,45 +688,11 @@ static void gfx_scegu_set_zmode_decal(bool zmode_decal) {
     gfx_scegu_update_depth_offset();
 }
 
-/* The GE scissor is the game's scissor cut down to the viewport.  Triangles
- * reach the GE unclipped up to the guard band (gfx_pc.c GE_GUARD_NDC, 3x the
- * viewport), so the scissor alone keeps a split-screen view inside its
- * quadrant: on the results screen the game's scissor spans more than the
- * replay's viewport, and the replay drew across the score panel beside it.
- * (Each setter used to overwrite the other's rectangle.) */
-static int vp_rect[4] = { 0, 0, SCR_WIDTH, SCR_HEIGHT }, sc_rect[4] = { 0, 0, SCR_WIDTH, SCR_HEIGHT }; /* x0 y0 x1 y1, GE coordinates */
-static int sc_empty; /* the scissor and the viewport do not overlap: draw nothing */
-static unsigned int sc_empty_skips, sc_empty_sets; /* logged with the display-list line: does this case really happen? */
-__attribute__((unused)) static void gfx_scegu_apply_scissor(void) {
-    int x0 = vp_rect[0] > sc_rect[0] ? vp_rect[0] : sc_rect[0];
-    int y0 = vp_rect[1] > sc_rect[1] ? vp_rect[1] : sc_rect[1];
-    int x1 = vp_rect[2] < sc_rect[2] ? vp_rect[2] : sc_rect[2];
-    int y1 = vp_rect[3] < sc_rect[3] ? vp_rect[3] : sc_rect[3];
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 > SCR_WIDTH) x1 = SCR_WIDTH;
-    if (y1 > SCR_HEIGHT) y1 = SCR_HEIGHT;
-    /* An empty overlap (on the results screen the game's scissor and a view's
-     * viewport can be different quadrants) must never reach the GE as an
-     * inverted rectangle: pspgu sends end = value - 1, i.e. end < start, which
-     * PPSSPP clamps and real hardware is not known to -- a scissor taken as
-     * huge lets pixels past the framebuffer, into the VRAM the textures live
-     * in.  Nothing can be visible: the draws are skipped instead. */
-    if (x1 <= x0 || y1 <= y0) {
-        sc_empty = 1;
-        sc_empty_sets++;
-        return;
-    }
-    sc_empty = 0;
-    sceGuScissor(x0, y0, x1, y1);
-}
-
-/* Both setters are what they were on every build that showed clean textures on
- * hardware: each sets the GE scissor to its own rectangle.  The overlap version
- * above (gfx_scegu_apply_scissor) is kept for reference but not used: since it
- * went in, the results screen's replays drew with garbled textures on the PSP,
- * by a mechanism PPSSPP does not show.  Views smaller than the screen are kept
- * inside their viewport by CPU clipping instead (gfx_pc.c ge_guard_ndc). */
+/* Each setter sets the GE scissor to its own rectangle.  (Making it the overlap
+ * of the two was tried on max_fps_experiments: on the PSP, never in PPSSPP, the
+ * results screen's replays then drew with garbled textures.  Views smaller than
+ * the screen are kept inside their viewport by CPU clipping instead: gfx_pc.c
+ * ge_guard_ndc.) */
 static void gfx_scegu_set_viewport(int x, int y, int width, int height) {
     sceGuViewport(2048 - (SCR_WIDTH / 2) + x + (width / 2), 2048 + (SCR_HEIGHT / 2) - y - (height / 2), width, height);
     sceGuScissor(x, SCR_HEIGHT - y - height, x + width, SCR_HEIGHT - y);
@@ -804,11 +770,6 @@ static void gfx_scegu_draw_triangles(float buf_vbo[], UNUSED size_t buf_vbo_len,
         port_log("  tris %d: v0 (%.2f,%.2f,%.2f) uv (%.2f,%.2f) col %08X tex %d [blend %d alphatest %d texfunc %d depth %d]\n", (int) buf_vbo_num_tris, v[0].x, v[0].y, v[0].z, v[0].u, v[0].v, v[0].color, (cur_shader && cur_shader->texture_used[0]) ? (int) psp_tex_bound : -1,
                  gl_blend, dbg_alphatest, dbg_texfunc, dbg_depth_test);
     }
-    if (sc_empty) { /* see gfx_scegu_apply_scissor: nothing of this batch can be visible */
-        sc_empty_skips++;
-        batch_ptr = NULL; /* a directly emitted batch is simply left behind, past the list's write position */
-        return;
-    }
     if (!is_shader_enabled(cur_shader->shader_id)) {
         gfx_scegu_apply_shader(get_shader_from_id(get_shader_remap(cur_shader->shader_id)));
     }
@@ -870,9 +831,6 @@ static void gfx_scegu_draw_triangles(float buf_vbo[], UNUSED size_t buf_vbo_len,
 }
 
 void gfx_scegu_draw_triangles_2d(float buf_vbo[], UNUSED size_t buf_vbo_len, UNUSED size_t buf_vbo_num_tris) {
-    if (sc_empty) {
-        return;
-    }
     if (!is_shader_enabled(cur_shader->shader_id)) {
         gfx_scegu_apply_shader(get_shader_from_id(get_shader_remap(cur_shader->shader_id)));
     }
@@ -930,7 +888,6 @@ void port_fb_copy_request(int x, int y, int w, int h, uint16_t *target) {
         cap_count++;
     }
     cap_req[i].x = x; cap_req[i].y = y; cap_req[i].w = w; cap_req[i].h = h; cap_req[i].target = target;
-    { extern void port_fb_tile_note(void *target, unsigned int bytes); port_fb_tile_note(target, (unsigned int) (w * h * 2)); } /* rewritten every frame: keeps its content hash */
 }
 
 /* N64 320x240 frame coordinates -> PSP frame pixels.  The 3D view keeps the
@@ -1001,8 +958,7 @@ static void gfx_scegu_capture_screens(void) {
     sceGuDrawBufferList(GU_PSM_5650, cur_draw_fb, BUF_WIDTH);
     sceGuOffset(2048 - (SCR_WIDTH / 2), 2048 - (SCR_HEIGHT / 2));
     sceGuViewport(2048 - (SCR_WIDTH / 2), 2048 - (SCR_HEIGHT / 2), SCR_WIDTH, SCR_HEIGHT);
-    vp_rect[0] = sc_rect[0] = 0; vp_rect[1] = sc_rect[1] = 0; vp_rect[2] = sc_rect[2] = SCR_WIDTH; vp_rect[3] = sc_rect[3] = SCR_HEIGHT;
-    sceGuScissor(0, 0, SCR_WIDTH, SCR_HEIGHT); /* the rectangles above say so too; the interpreter re-sends its own */
+    sceGuScissor(0, 0, SCR_WIDTH, SCR_HEIGHT);
     gfx_scegu_set_use_alpha(true);
     gfx_scegu_set_depth_test(false);
     gfx_scegu_set_depth_mask(false);
@@ -1145,10 +1101,6 @@ static void gfx_scegu_end_frame(void) {
     }
     if ((++frames % 300) == 0 || used > GU_LIST_BYTES - 65536) {
         port_log("gfx: display list %u bytes (max %u of %u)\n", used, max_used, (unsigned) GU_LIST_BYTES);
-        if (sc_empty_sets != 0) {
-            port_log("gfx: empty scissor/viewport overlap set %u times, %u batches skipped under it\n", sc_empty_sets, sc_empty_skips);
-            sc_empty_sets = sc_empty_skips = 0;
-        }
     }
     sceGuSync(0, 0);
     gfx_scegu_capture_screens(); // stadium TV tiles from the finished frame (before the vblank wait absorbs it)

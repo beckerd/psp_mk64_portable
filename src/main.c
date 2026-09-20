@@ -1472,7 +1472,9 @@ s32 gPortVblanksPerFrame = 2;
 s32 gPortLastFrameVblanks = 2;
 u32 gPortLastFrameBusyUs = 0;
 static s32 sPortSplitHoldoff; /* iterations left at 30 fps after 60 could not be held */
-static s32 sExpRunning;        /* the data/exp measurement is rotating its experiments */
+static s32 sExpRunning;        /* PORT_EXP builds: the data/exp measurement is rotating its experiments */
+static s32 sNoDirect = -1;
+extern int gPortNoDirectEmit;  /* gfx_pc.c */
 
 /* A frame may be split when it is a plain 1P race frame: the 2P-4P loops and
  * the lockstep (one network frame per iteration) keep whole frames. */
@@ -1545,8 +1547,7 @@ static void port_split_stats(void) {
 #define GOV_CEIL 5000.0f
     {
         static u32 sGovN, sGovLate, sGovBusy, sGovHold;
-        extern s32 gPortExpMode;
-        if (gRaceState < RACE_IN_PROGRESS || gPortExpMode != 0) {
+        if (gRaceState < RACE_IN_PROGRESS || sExpRunning) {
             gPortDrawDist = (float) PORT_DRAW_DIST;
             sGovN = sGovLate = sGovBusy = sGovHold = 0;
         } else {
@@ -1568,9 +1569,21 @@ static void port_split_stats(void) {
             }
         }
     }
-    /* Hardware cost breakdown: with an empty data/exp file, a race rotates
-     * through six renderer experiments ONE SECOND at a time and adds each
-     * one's busy time up over the whole run, logging the six averages every 30
+    {
+        /* data/nodirect: batches go through the staging copy again (the switch
+         * to pull if direct vertex emit ever misbehaves on some hardware) */
+        if (sNoDirect < 0) {
+            FILE* nf = fopen(port_save_path("nodirect"), "rb");
+            sNoDirect = nf != NULL;
+            if (nf != NULL) fclose(nf);
+            if (sNoDirect) PORT_LOG("gfx: direct vertex emit off (data/nodirect)\n");
+            gPortNoDirectEmit = sNoDirect;
+        }
+    }
+#ifdef PORT_EXP
+    /* Hardware cost breakdown (-DPORT_EXP builds): with an empty data/exp file, a race rotates
+     * through eight renderer experiments ONE SECOND at a time and adds each
+     * one's busy time up over the whole run, logging the averages every 24
      * seconds.  (Five-second windows compared different stretches of track:
      * the scene changed more than the stages cost.)  The first 12 pictures
      * after a switch are left out: caches refill.  What is left when a stage
@@ -1580,31 +1593,6 @@ static void port_split_stats(void) {
         extern s32 gPortExpMode;
         static s32 sExpOn = -1;
         static u32 sExpPic, sExpTotal, sExpSum[8], sExpN[8], sExpLate[8];
-        extern int gExpDirectEmitOff;
-        extern s32 gPortOldClip;
-        static s32 sNoDirect = -1;
-        static s32 sOldClipRead;
-        if (!sOldClipRead) {
-            FILE* of = fopen(port_save_path("oldclip"), "rb");
-            sOldClipRead = 1;
-            gPortOldClip = of != NULL;
-            if (of != NULL) fclose(of);
-            if (gPortOldClip) PORT_LOG("gfx: data/oldclip: the clipper runs all seven planes\n");
-            {
-                extern s32 gPortCourseStatic;
-                FILE* cf = fopen(port_save_path("coursestatic"), "rb");
-                gPortCourseStatic = cf != NULL;
-                if (cf != NULL) fclose(cf);
-                if (gPortCourseStatic) PORT_LOG("gfx: data/coursestatic: course textures are not re-hashed\n");
-            }
-
-        }
-        if (sNoDirect < 0) { /* data/nodirect: batches go through the staging copy again (if direct emit misbehaves on hardware) */
-            FILE* nf = fopen(port_save_path("nodirect"), "rb");
-            sNoDirect = nf != NULL;
-            if (nf != NULL) fclose(nf);
-            if (sNoDirect) PORT_LOG("gfx: direct vertex emit off (data/nodirect)\n");
-        }
         if (sExpOn < 0) {
             FILE* f = fopen(port_save_path("exp"), "rb");
             sExpOn = f != NULL;
@@ -1643,8 +1631,9 @@ static void port_split_stats(void) {
         } else {
             gPortExpMode = 0;
         }
-        gExpDirectEmitOff = sNoDirect || gPortExpMode == 6;
+        gPortNoDirectEmit = sNoDirect || gPortExpMode == 6;
     }
+#endif
     if (sHalves == 120) {
         if (sMissed > 14 && !sExpRunning) { /* over an eighth late: the game would run visibly slow */
             sPortSplitHoldoff = 300;
@@ -1687,7 +1676,6 @@ void port_game_loop_one_iteration(void) {
     if (gGamestateNext != gGamestate) {
         PORT_TRACE("gamestate %d -> %d\n", gGamestate, gGamestateNext);
         gGamestate = gGamestateNext;
-        port_course_textures_loaded(NULL, 0); /* the heap is about to be reused; a course load sets the block again */
         update_gamestate();
         PORT_TRACE(" update_gamestate done\n");
     }
