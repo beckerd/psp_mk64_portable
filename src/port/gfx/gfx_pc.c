@@ -114,9 +114,9 @@ struct LoadedVertex {
     uint32_t oc;    /* VOC_* */
     uint32_t oc_pad;
 } __attribute__((packed, aligned(16)));
-#define VOC_RIGHT 0x001   /* beyond a screen edge */
-#define VOC_LEFT 0x002
-#define VOC_TOP 0x004
+#define VOC_RIGHT 0x001   /* beyond a screen edge: the VFPU compare's bits for x, y, -x, -y > w */
+#define VOC_TOP 0x002
+#define VOC_LEFT 0x004
 #define VOC_BOTTOM 0x008
 #define VOC_GUARD 0x010   /* beyond the GE guard band: the triangle needs the CPU clipper */
 #define VOC_FAR 0x100     /* beyond the draw distance */
@@ -1481,7 +1481,7 @@ struct ShaderProgram {
 };
 
 #ifndef GE_GUARD_NDC
-#define GE_GUARD_NDC 3.0f /* see gfx_ge_tl_near_clip */
+#define GE_GUARD_NDC 3.0f /* see gfx_ge_tl_near_clip; gfx_sp_vertex's VFPU code has the same 3.0 as an immediate */
 #endif
 extern float gPortDrawDist;
 /* VFPU lighting (max_fps_experiments).  Refreshed when the lights change: the
@@ -1716,19 +1716,35 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                 if (wz - proj_vec[2] < 0.0f) d->clip_rej |= Z_NEG;
             }
             {
-                uint32_t oc = proj_vec[3] > gPortDrawDist ? VOC_FAR : 0;
-                if (d->clip_rej == 0) { /* clip.w >= GE_TL_NEAR > 0 */
-                    float px = proj_vec[0], py = proj_vec[1], pw = proj_vec[3];
-                    float gw = GE_GUARD_NDC * pw, iw = 1.0f / pw;
-                    if (px > pw) oc |= VOC_RIGHT;
-                    if (px < -pw) oc |= VOC_LEFT;
-                    if (py > pw) oc |= VOC_TOP;
-                    if (py < -pw) oc |= VOC_BOTTOM;
-                    if (px > gw || px < -gw || py > gw || py < -gw) oc |= VOC_GUARD;
-                    d->sx = px * iw;
-                    d->sy = py * iw;
+                /* On the VFPU, from the clip position still in c100 (x y z w):
+                 * (x, y, -x, -y) > (w, w, w, w) is the four screen-edge bits in
+                 * one compare, the same against GE_GUARD_NDC * w is the guard
+                 * band (its "any" bit), and vrcp replaces the divide for the
+                 * projected position, stored straight into the vertex. */
+                uint32_t cc_edge, cc_guard;
+                __asm__ volatile (
+                    "vmov.p  c000, c100\n"          /* s000 s001 =  x  y */
+                    "vneg.p  c002, c100\n"          /* s002 s003 = -x -y */
+                    "vone.q  c010\n"
+                    "vscl.q  c010, c010, s103\n"    /* w w w w */
+                    "vcmp.q  GT, c000, c010\n"
+                    "mfvc    %1, $131\n"
+                    "vfim.s  s020, 3.0\n"           /* GE_GUARD_NDC */
+                    "vscl.q  c010, c010, s020\n"
+                    "vcmp.q  GT, c000, c010\n"
+                    "mfvc    %2, $131\n"
+                    "vrcp.s  s020, s103\n"
+                    "vscl.p  c030, c100, s020\n"    /* x/w y/w */
+                    "sv.q    c030, 48 + %0\n"       /* sx sy (oc and its pad are written below); *d is in-out: only this row is touched */
+                    : "+m"(*d), "=r"(cc_edge), "=r"(cc_guard) :
+                );
+                {
+                    uint32_t oc = proj_vec[3] > gPortDrawDist ? VOC_FAR : 0;
+                    if (d->clip_rej == 0) { /* clip.w >= GE_TL_NEAR > 0: the flags mean something */
+                        oc |= (cc_edge & 0xF) | ((cc_guard >> 4) & 1) << 4;
+                    }
+                    d->oc = oc;
                 }
-                d->oc = oc;
             }
         } else if (gfx_hud_anchor) {
             /* Ortho HUD element: clip.x (w == 1) tells which screen edge it belongs to. */
