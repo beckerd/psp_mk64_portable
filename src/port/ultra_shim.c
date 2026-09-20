@@ -284,34 +284,74 @@ void osContGetReadData(OSContPad* pad) {
 /* EEPROM: a 512 byte file next to the EBOOT                                  */
 /* ------------------------------------------------------------------------- */
 
+/* The save is two files, each the whole 512-byte image, written one after
+ * the other.  "wb" truncates before it writes, so a power-off, a pulled
+ * stick or HOME in the middle of a save leaves one file short -- and the other
+ * one whole: the backup still holds the previous save while it is the primary
+ * that is torn, and already holds the new one when the primary's turn comes.
+ * (No rename: sceIoRename is unreliable across firmwares, and FAT cannot
+ * rename over an existing file anyway.) */
 #define EEPROM_FILE port_save_path("eeprom.bin")
+#define EEPROM_BACKUP_FILE port_save_path("eeprom.bak")
 #define EEPROM_SIZE 512
 
 static u8 sEeprom[EEPROM_SIZE];
 static u8 sEepromLoaded;
 
+/* A whole image or nothing: a short file is a torn save. */
+static int eeprom_read_file(const char* path) {
+    u8 image[EEPROM_SIZE];
+    size_t n = 0;
+    FILE* fp = fopen(path, "rb");
+    if (fp != NULL) {
+        n = fread(image, 1, sizeof(image), fp);
+        fclose(fp);
+    }
+    if (n != sizeof(image)) {
+        return 0;
+    }
+    memcpy(sEeprom, image, sizeof(sEeprom));
+    return 1;
+}
+
+static s32 eeprom_write_file(const char* path) {
+    FILE* fp = fopen(path, "wb");
+    size_t n;
+    if (fp == NULL) {
+        return -1;
+    }
+    n = fwrite(sEeprom, 1, sizeof(sEeprom), fp);
+    if (fclose(fp) != 0 || n != sizeof(sEeprom)) {
+        return -1;
+    }
+    return 0;
+}
+
 static void eeprom_load(void) {
-    FILE* fp;
     if (sEepromLoaded) {
         return;
     }
     sEepromLoaded = 1;
-    memset(sEeprom, 0, sizeof(sEeprom));
-    fp = fopen(EEPROM_FILE, "rb");
-    if (fp != NULL) {
-        fread(sEeprom, 1, sizeof(sEeprom), fp);
-        fclose(fp);
+    if (eeprom_read_file(EEPROM_FILE)) {
+        return;
     }
+    if (eeprom_read_file(EEPROM_BACKUP_FILE)) {
+        PORT_LOG("save: eeprom.bin missing or short, restored from eeprom.bak\n");
+        eeprom_write_file(EEPROM_FILE); /* make the pair whole again */
+        return;
+    }
+    memset(sEeprom, 0, sizeof(sEeprom)); /* no save yet: a blank EEPROM */
 }
 
 static s32 eeprom_save(void) {
-    FILE* fp = fopen(EEPROM_FILE, "wb");
-    if (fp == NULL) {
-        return -1;
+    /* The backup first: see the note at EEPROM_FILE.  A save the stick has no
+     * room for is reported to the game instead of passing for written. */
+    s32 backup = eeprom_write_file(EEPROM_BACKUP_FILE);
+    s32 primary = eeprom_write_file(EEPROM_FILE);
+    if (backup != 0 || primary != 0) {
+        PORT_LOG("save: write failed (eeprom.bak %d, eeprom.bin %d)\n", (int) backup, (int) primary);
     }
-    fwrite(sEeprom, 1, sizeof(sEeprom), fp);
-    fclose(fp);
-    return 0;
+    return primary;
 }
 
 s32 osEepromProbe(UNUSED OSMesgQueue* mq) {
