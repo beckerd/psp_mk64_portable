@@ -1455,23 +1455,59 @@ static void port_split_stats(void) {
     sBusySum += gPortLastFrameBusyUs;
     if (gPortLastFrameBusyUs > sBusyMax) sBusyMax = gPortLastFrameBusyUs;
     if (gPortLastFrameVblanks > 1) sMissed++;
-    /* The governor: every half second, pull the draw distance in while
-     * pictures are late, let it out again while there is headroom. */
+    /* The governor, once the race itself runs (the flyover and the countdown
+     * are always late and say nothing about the race): every second, pull the
+     * draw distance in a little only if pictures really were late, never below
+     * GOV_FLOOR, and let it straight back out after a clean second.  (Its first
+     * version also reacted to the average busy time and sat at 1200 of 3000 for
+     * whole races with no late picture at all: far too visible.) */
+#define GOV_FLOOR 2400.0f
     {
-        static u32 sGovN, sGovLate, sGovBusy;
-        sGovN++;
-        sGovBusy += gPortLastFrameBusyUs;
-        if (gPortLastFrameVblanks > 1) sGovLate++;
-        if (sGovN == 30) {
-            u32 avg = sGovBusy / 30;
-            if (sGovLate >= 2 || avg > 15800) {
-                gPortDrawDist *= sGovLate >= 6 ? 0.80f : 0.90f;
-                if (gPortDrawDist < 1200.0f) gPortDrawDist = 1200.0f;
-            } else if (sGovLate == 0 && avg < 13500 && gPortDrawDist < (float) PORT_DRAW_DIST) {
-                gPortDrawDist *= 1.05f;
-                if (gPortDrawDist > (float) PORT_DRAW_DIST) gPortDrawDist = (float) PORT_DRAW_DIST;
+        static u32 sGovN, sGovLate;
+        extern s32 gPortExpMode;
+        if (gRaceState < RACE_IN_PROGRESS || gPortExpMode != 0) {
+            gPortDrawDist = (float) PORT_DRAW_DIST;
+            sGovN = sGovLate = 0;
+        } else {
+            sGovN++;
+            if (gPortLastFrameVblanks > 1) sGovLate++;
+            if (sGovN == 60) {
+                if (sGovLate >= 4) {
+                    gPortDrawDist *= 0.93f;
+                    if (gPortDrawDist < GOV_FLOOR) gPortDrawDist = GOV_FLOOR;
+                } else if (sGovLate == 0) {
+                    gPortDrawDist *= 1.10f;
+                    if (gPortDrawDist > (float) PORT_DRAW_DIST) gPortDrawDist = (float) PORT_DRAW_DIST;
+                }
+                sGovN = sGovLate = 0;
             }
-            sGovN = sGovLate = sGovBusy = 0;
+        }
+    }
+    /* Hardware cost breakdown: with an empty data/exp file, a race cycles
+     * through renderer experiments five seconds at a time and logs the busy
+     * time of each -- what is left when a stage is switched off is what the
+     * others cost.  The picture is wrong while it runs. */
+    {
+        extern s32 gPortExpMode;
+        static s32 sExpOn = -1;
+        static u32 sExpN, sExpBusy, sExpLate;
+        if (sExpOn < 0) {
+            FILE* f = fopen(port_save_path("exp"), "rb");
+            sExpOn = f != NULL;
+            if (f != NULL) fclose(f);
+        }
+        if (sExpOn && gRaceState >= RACE_IN_PROGRESS) {
+            sExpN++;
+            sExpBusy += gPortLastFrameBusyUs;
+            if (gPortLastFrameVblanks > 1) sExpLate++;
+            if (sExpN == 300) {
+                static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports" };
+                PORT_LOG("exp %d (%s): busy %u us avg per picture, %u of 300 late\n", (int) gPortExpMode, names[gPortExpMode], (unsigned) (sExpBusy / 300), (unsigned) sExpLate);
+                gPortExpMode = (gPortExpMode + 1) % 6;
+                sExpN = sExpBusy = sExpLate = 0;
+            }
+        } else {
+            gPortExpMode = 0;
         }
     }
     if (sHalves == 120) {

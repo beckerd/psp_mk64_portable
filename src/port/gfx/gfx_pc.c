@@ -1269,7 +1269,9 @@ static void import_texture_any(int tile, uint8_t mirror) {
     gfx_debug_dump_texture(NULL, out32, width, height, fmt, siz, src);
 }
 
+extern s32 gPortExpMode; /* defined with gfx_sp_vertex below */
 static void import_texture(int tile) {
+    if (gPortExpMode == 5 && rendering_state.textures[tile] != NULL) return; /* keep whatever is bound */
     uint8_t fmt = rdp.texture_tile.fmt;
     uint8_t siz = rdp.texture_tile.siz;
     // Reject a degenerate render-tile size (e.g. lrt < ult -> height 0, seen on
@@ -1491,10 +1493,15 @@ static void gfx_vfpu_lights_refresh(void) {
     vl_amb[3] = vl_look[0][3] = vl_look[1][3] = 0.0f;
 }
 
+/* main.c's hardware cost breakdown (data/exp): 0 = everything, 1 = no
+ * triangles, 2 = no vertices either, 3 = the display list is not run, 4 =
+ * triangles culled and clipped but not drawn, 5 = no texture imports. */
+s32 gPortExpMode;
 static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *vertices) {
 #ifdef PORT_EXP_NOVTX
     return;
 #endif
+    if (gPortExpMode == 2) return;
     float temp_vec[4] __attribute__((aligned(16)));
     float proj_vec[4] __attribute__((aligned(16)));
     float view_vec[4] __attribute__((aligned(16)));
@@ -2095,6 +2102,7 @@ static inline void gfx_emit_vertex(const struct LoadedVertex *cv, uint32_t cc_id
  * planes hundreds of times across single polygons). */
 #define GFX_MAX_UV_REPEATS 16.0f
 static void gfx_emit_triangle(const struct LoadedVertex *a, const struct LoadedVertex *b, const struct LoadedVertex *c, uint32_t cc_id, int lod, int depth) {
+    if (gPortExpMode == 4) return;
     if (tri_state.use_texture && depth < 0) { // subdivision disabled: does not fix distant-texture aliasing (needs mipmaps)
         float umin = a->u, umax = a->u, vmin = a->v, vmax = a->v;
         if (b->u < umin) umin = b->u; if (b->u > umax) umax = b->u;
@@ -2314,6 +2322,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
 #ifdef PORT_EXP_NOTRI
     return;
 #endif
+    if (gPortExpMode == 1 || gPortExpMode == 2) return;
 #ifdef PORT_PROFILE_DL
     uint32_t _pt0 = port_time_us();
 #endif
@@ -3746,7 +3755,7 @@ void gfx_run(Gfx *commands) {
     //double t0 = gfx_wapi->get_time();
     unsigned int t0 = sceKernelLibcClock();
     gfx_rapi->start_frame();
-    gfx_run_dl(commands);
+    if (gPortExpMode != 3) gfx_run_dl(commands);
     if (gfx_trace_frames > 0) {
         gfx_trace_frames--;
         port_log("dl done\n");
