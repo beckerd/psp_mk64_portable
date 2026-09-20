@@ -1,5 +1,42 @@
 # Ad hoc test notes (for testers)
 
+## Build 14: leaving a race, and a safer save (please try)
+
+EBOOT.PBP MD5 `ee4751fdb44c9224a022e73f41745559`.  **Every PSP needs this
+build**: from now on two PSPs on different builds refuse each other, and the
+lobby says "A PSP HAS ANOTHER GAME VERSION" instead of joining and drifting
+out of sync.  (A PSP still on build 13 just sits on JOINING / SEARCHING.)
+The first start rebuilds the game data from the ROM once, as after an install.
+
+None of this has run on real PSPs yet, only in the emulator.  Please try:
+
+1. **The pause menu in a race** now reads CONTINUE / MAIN MENU / LEAVE
+   MULTIPLAYER (VS and Battle keep COURSE CHANGE and DRIVER CHANGE), full
+   screen.  MAIN MENU takes everyone to the game select together, still
+   connected.
+2. **A joiner picks LEAVE MULTIPLAYER.**  The joiner should land on the main
+   menu alone; the host should get "PLAYER 2 LEFT THE RACE" -- CONTINUE / EXIT
+   at once (no five-second wait), and CONTINUE should carry on the race.
+3. **The host picks LEAVE MULTIPLAYER.**  The host lands on the main menu;
+   the joiner gets "HOST EXITED THE GAME" -- MAIN MENU at once.
+4. **Another number of players.**  In a 2P session: pause, MAIN MENU, then the
+   host moves to 3P GAME (only the host's pad moves that cursor now), picks a
+   mode and confirms.  The host should go straight to "WAITING FOR 2 PLAYERS";
+   the joiner should see "HOST DISCONNECTED" -- OK, and after OK its menu
+   still shows the host's picks, so OK then JOIN RACE finds the new race.
+   Picking 2P again instead is a rematch with no lobby, as before.
+5. **After any of these, start a new ad hoc race** on the same PSPs without
+   restarting the game: does the WLAN come back up and the lobby find the
+   other PSP?
+6. **The save**: there is now an `eeprom.bak` next to `data/eeprom.bin`.  If
+   the game is interrupted mid-save (HOME, battery), the next start restores
+   from the backup -- your cups and records should never reset again.
+
+If anything goes wrong, send `data/log.txt` and `data/log_prev.txt` from every
+PSP, and say which step it was.
+
+---
+
 ## Build 6: the desync is fixed (please confirm)
 
 I found the cause.  In versus races the circling bomb karts were only
@@ -12,7 +49,7 @@ instead of running on to two winners.
 
 Please confirm:
 
-1. Both PSPs on this build (MD5 6d4ef121deca02468bf58c1ea919e6b4), reboot both for clean logs.
+1. Both PSPs on this build (the MD5 at the top), reboot both for clean logs.
 2. A 2P VS race on a course with bombs (Luigi Raceway is a good one), ideally
    with the two of you driving in different parts of the track.
 3. Does it stay in sync now?  If anything still goes wrong, send log.txt and
