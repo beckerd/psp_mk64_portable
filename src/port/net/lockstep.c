@@ -36,6 +36,10 @@
 #include "code_800029B0.h"
 #include "cpu_vehicles_camera_path.h"
 
+/* An id of this build's code (generated at link time, tools/psp/gen_build_id.py).
+ * Lockstep needs the same simulation everywhere, so every packet carries it and
+ * a packet from another build is refused: two builds cannot join each other. */
+extern const u16 gPortBuildId;
 #define RING 128
 #define INPUT_DELAY 2
 #define REDUNDANCY 8
@@ -77,7 +81,7 @@ typedef struct NetPktTag {
     u8 ids[NET_MAX_PLAYERS][NET_ID_LEN]; /* START: slot -> transport id */
     u8 players, delay, dropped, mode;    /* dropped: bitmask (host's word); mode/cc: the race (ADVERT/HELLO/START) */
     u8 cc, pad0, pad1, pad2;
-    u16 seed, pad3;                      /* START: gRandomSeed16 */
+    u16 seed, build;                     /* START: gRandomSeed16.  build: the sender's gPortBuildId (0 before build 14) */
     s32 gtimer, flash, timing;           /* START: gGlobalTimer, gCycleFlashMenu, gMenuTimingCounter */
     u32 drop_frame[NET_MAX_PLAYERS];     /* first neutral frame per dropped slot */
     union {
@@ -108,6 +112,7 @@ static int sLobby, sHaveHost, sJoined; /* client: a matching host was found / it
  * with only MAIN MENU left. */
 enum { MODAL_NONE, MODAL_HOST_DROP, MODAL_RESUMING, MODAL_LEAVING, MODAL_WAIT_HOST, MODAL_HOST_GONE, MODAL_DROPPED, MODAL_DESYNC, MODAL_RESULT_FAILED, MODAL_HOST_LEFT };
 static int sModal, sModalSel, sModalSlot, sDesyncHits;
+static int sOtherBuild; /* lobby: a matching race / joiner on another build was heard and refused */
 static int sModalArmed; /* HOST_LEFT: the button went down, close on its release */
 /* The host freezes one result and waits for receipt, never agreement.  It
  * holds frame F while clients can reach at most F + INPUT_DELAY + 1.  Starting
@@ -245,6 +250,7 @@ static void fill_drop(NetPkt* p) {
 
 static void send_pkt(NetPkt* p) {
     p->magic = NET_MAGIC;
+    p->build = gPortBuildId;
     p->session = sSessionId;
     net_transport_send(p, sizeof(*p));
 }
@@ -346,6 +352,15 @@ static void apply_drops(const NetPkt* p) {
 static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
     int slot, from_host;
     if (p->magic != NET_MAGIC) return;
+    if (p->build != gPortBuildId) {
+        /* Another build: never part of our race.  Say so where it explains a
+         * wait -- the race we are looking for, or a joiner asking for ours. */
+        if (!sRunning && (p->type == PKT_ADVERT || p->type == PKT_HELLO) && criteria_match(p) && !sOtherBuild) {
+            sOtherBuild = 1;
+            PORT_LOG("net: a console on another build (%04X, ours %04X) is refused\n", p->build, gPortBuildId);
+        }
+        return;
+    }
     from_host = memcmp(sIds[0], from, NET_ID_LEN) == 0;
     /* A joiner still retrying HELLO has not received its session ID yet. */
     if (sRunning && p->type != PKT_HELLO && p->session != sSessionId) return;
@@ -398,10 +413,16 @@ static void handle_pkt(const NetPkt* p, const u8 from[NET_ID_LEN]) {
         if (memcmp(p->ids[0], from, NET_ID_LEN) != 0) return;
         if (sRunning) { apply_drops(p); return; }
         if (sLobby != LOBBY_SEARCHING || !sHaveHost || memcmp(sHostId, from, NET_ID_LEN) != 0) return;
+        /* players sizes the input rings and the game's player count: it must
+         * be the race we asked for, and the delay the one we run with. */
+        if (!criteria_match(p) || p->players < 2 || p->players > NET_MAX_PLAYERS || p->delay != INPUT_DELAY) {
+            PORT_LOG("net: START refused: %d players, delay %d\n", p->players, p->delay);
+            return;
+        }
         sPlayers = p->players;
         memcpy(sIds, p->ids, sizeof(sIds));
         slot = slot_of(net_transport_local_id());
-        if (slot < 0) { PORT_LOG("net: START without our id\n"); return; }
+        if (slot < 0 || slot >= sPlayers) { PORT_LOG("net: START without our id\n"); return; }
         sSlot = slot;
         sSessionId = p->session;
         /* The host's state at its OK press: what the character select and
@@ -723,6 +744,7 @@ static void lobby_cancel(void) {
 void port_net_lobby_open(void) {
     FILE* f;
     criteria_now();
+    sOtherBuild = 0;
     sChoice = 0;
     sAuto = 0;
     f = fopen(port_save_path("netrole.bin"), "rb");
@@ -908,6 +930,7 @@ void port_net_lobby_draw(void) {
     { /* debug: one screenshot per lobby state (a frame after it first draws) */
         static int shot[8], seen[8];
         if (seen[sLobby]++ == 3 && !shot[sLobby]) { shot[sLobby] = 1; port_screenshot(8000 + sLobby); }
+        { static int n; if (sOtherBuild && ++n == 5) port_screenshot(8100); } /* the other-build notice */
     }
 #endif
     gDisplayListHead = draw_box(gDisplayListHead, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0x90); /* dim the menu */
@@ -934,11 +957,13 @@ void port_net_lobby_draw(void) {
             for (s = 1; s < sPlayers; s++) n += sKnown[s];
             snprintf(line, sizeof(line), "WAITING FOR %d PLAYER%s", sPlayers - 1 - n, sPlayers - 1 - n == 1 ? "" : "S");
             lobby_line(LB_Y0 + 94, line, 0.65f, TEXT_PORT_GREY_PULSE);
+            if (sOtherBuild) lobby_line(LB_Y0 + 114, "A PSP HAS ANOTHER GAME VERSION", 0.55f, TEXT_RED);
             lobby_item(LB_Y0 + 138, "CANCEL", sCancelSel);
             if (sCancelSel) { cursorY = LB_Y0 + 138; cursorText = "CANCEL"; }
             break;
         case LOBBY_SEARCHING:
             lobby_line(LB_Y0 + 94, sJoined ? "JOINED RACE" : sHaveHost ? "JOINING..." : "SEARCHING...", 0.65f, TEXT_PORT_GREY_PULSE);
+            if (sOtherBuild && !sJoined) lobby_line(LB_Y0 + 114, "A PSP HAS ANOTHER GAME VERSION", 0.55f, TEXT_RED);
             lobby_item(LB_Y0 + 138, "CANCEL", sCancelSel);
             if (sCancelSel) { cursorY = LB_Y0 + 138; cursorText = "CANCEL"; }
             break;

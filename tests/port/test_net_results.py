@@ -45,6 +45,7 @@ typedef uint8_t u8; typedef int8_t s8; typedef uint16_t u16; typedef int16_t s16
 typedef uint32_t u32; typedef int32_t s32; typedef float f32;
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
 #define PORT_NET 1
+const uint16_t gPortBuildId = 0x1234; /* tools/psp/gen_build_id.py in the real build */
 #define PORT_NET_ADHOC 1
 #define NET_MAX_PLAYERS 4
 #define NET_ID_LEN 6

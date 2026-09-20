@@ -102,6 +102,11 @@ O_FILES := $(foreach f,$(C_FILES),$(BUILD_DIR)/$(f:.c=.o)) \
 
 DEP_FILES := $(O_FILES:.o=.d)
 
+# Generated at link time: an id of this build's code, carried by every ad hoc
+# packet so consoles on different builds refuse each other (tools/psp/gen_build_id.py).
+BUILD_ID_C := $(BUILD_DIR)/port_build_id.c
+BUILD_ID_O := $(BUILD_ID_C:.c=.o)
+
 ALL_DIRS := $(BUILD_DIR) $(addprefix $(BUILD_DIR)/,$(GAME_SRC_DIRS) $(PORT_SRC_DIRS) src/os src/os/math $(COURSE_DIRS) \
             $(DATA_DIR) $(DATA_DIR)/karts $(DATA_DIR)/sound_data \
             $(TEXTURES_DIR)/raw $(TEXTURES_DIR)/standalone $(TEXTURES_DIR)/startup_logo \
@@ -292,14 +297,21 @@ $(LINK_NOLOAD): $(PSPSDK)/lib/linkfile.prx Makefile.psp
 $(LINK_PROGBITS): $(PSPSDK)/lib/linkfile.prx Makefile.psp
 	$(V)sed 's|^  _end = \.;|  $(ASSET_SECTION_PROGBITS)\n  _end = .;|' $< > $@
 
-$(ELF): $(O_FILES) $(LINK_NOLOAD)
+# The asset objects are left out: the link renames their sections in place, and
+# their contents are the ROM's, not the code's.
+$(BUILD_ID_C): $(filter-out $(ASSET_OBJS),$(O_FILES)) tools/psp/gen_build_id.py
+	$(V)$(PYTHON) tools/psp/gen_build_id.py $@ $(filter-out $(ASSET_OBJS),$(O_FILES))
+$(BUILD_ID_O): $(BUILD_ID_C)
+	$(V)$(CC) -c $(CFLAGS) -o $@ $<
+
+$(ELF): $(O_FILES) $(BUILD_ID_O) $(LINK_NOLOAD)
 	$(call print,Linking:,$@,)
 	$(V)for o in $(ASSET_OBJS); do psp-objcopy --preserve-dates --rename-section .data=.assetdata --rename-section .rodata=.assetrodata $$o; done
-	$(V)$(LD) $(LDFLAGS_BASE) -Wl,-q,-T$(LINK_NOLOAD) -o $@ $(O_FILES) $(LIBS)
+	$(V)$(LD) $(LDFLAGS_BASE) -Wl,-q,-T$(LINK_NOLOAD) -o $@ $(O_FILES) $(BUILD_ID_O) $(LIBS)
 	$(V)psp-fixup-imports $@
 
 $(ELF_ASSETS): $(O_FILES) $(LINK_PROGBITS) $(ELF)
-	$(V)$(LD) $(LDFLAGS_BASE) -Wl,-q,-T$(LINK_PROGBITS) -o $@ $(O_FILES) $(LIBS)
+	$(V)$(LD) $(LDFLAGS_BASE) -Wl,-q,-T$(LINK_PROGBITS) -o $@ $(O_FILES) $(BUILD_ID_O) $(LIBS)
 
 $(ASSETS_BIN): $(ELF_ASSETS) $(ELF) tools/psp/make_assets.py
 	$(V)python3 tools/psp/make_assets.py $(ELF_ASSETS) $(ELF) -o $@

@@ -57,6 +57,14 @@ CANCEL (Up/Down, Cross, Square cancels at any point).
   character; the course select answers the host's pad only.  Character select, course
   select, the race, pause and results all run in lockstep from there.
 
+Every packet carries the sender's build id (`gPortBuildId`, a hash of the
+code objects generated at link time by `tools/psp/gen_build_id.py`): lockstep
+needs the same simulation everywhere, so a packet from another build is
+refused and the two never join.  The lobby then shows "A PSP HAS ANOTHER GAME
+VERSION" under SEARCHING / WAITING (a build older than 14 sends id 0 and only
+ever sees SEARCHING).  START is also checked against the race the joiner asked
+for (players 2-4, the same input delay) before it sizes anything.
+
 Scripted tests pick the modal choice from `data/netrole.bin`: 0x12/0x13/0x14
 = HOST for a 2/3/4-player race, 2..4 = JOIN.  Nothing there: the modal waits
 for the pad.  A machine without a session plays single player as before.
