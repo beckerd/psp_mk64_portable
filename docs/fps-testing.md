@@ -3,7 +3,12 @@
 This is an experimental build, separate from the ad hoc test build.  It installs
 next to your normal copy and does not touch it or its save.
 
-EBOOT.PBP MD5 `1ddac638c35c72d1d010ea69720ea951`.
+EBOOT.PBP MD5 `1be2d5b35816d3fcd9350e7bc88410c1` (build 2).
+
+Build 2 (2026-09-20) over build 1: a rare freeze of two to three seconds in the
+middle of a race is addressed (the game no longer does any I/O while a race
+runs; the log is written out at a pause or at the end of the race), and if a
+freeze ever happens again the log says where the time went (`stall: ...`).
 
 ## What is new
 
