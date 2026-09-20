@@ -1415,6 +1415,7 @@ s32 gPortVblanksPerFrame = 2;
 s32 gPortLastFrameVblanks = 2;
 u32 gPortLastFrameBusyUs = 0;
 static s32 sPortSplitHoldoff; /* iterations left at 30 fps after 60 could not be held */
+static s32 sExpRunning;        /* the data/exp measurement is rotating its experiments */
 
 /* A frame may be split when it is a plain 1P race frame: the 2P-4P loops and
  * the lockstep (one network frame per iteration) keep whole frames. */
@@ -1506,6 +1507,7 @@ static void port_split_stats(void) {
             sExpOn = f != NULL;
             if (f != NULL) fclose(f);
         }
+        sExpRunning = sExpOn && gRaceState >= RACE_IN_PROGRESS;
         if (sExpOn && gRaceState >= RACE_IN_PROGRESS) {
             if (sExpPic >= 12) {
                 sExpSum[gPortExpMode] += gPortLastFrameBusyUs;
@@ -1516,7 +1518,8 @@ static void port_split_stats(void) {
                 sExpPic = 0;
                 gPortExpMode = (gPortExpMode + 1) % 6;
             }
-            if (++sExpTotal == 1800) {
+            sPortSplitHoldoff = 0; /* the measurement needs 60 fps pictures: no 30 fps fallback while it runs */
+            if (++sExpTotal == 900) { /* every 15 s of pictures */
                 static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports (and so no texture changes)" };
                 s32 m;
                 for (m = 0; m < 6; m++) {
@@ -1531,7 +1534,7 @@ static void port_split_stats(void) {
         }
     }
     if (sHalves == 120) {
-        if (sMissed > 14) { /* over an eighth late: the game would run visibly slow */
+        if (sMissed > 14 && !sExpRunning) { /* over an eighth late: the game would run visibly slow */
             sPortSplitHoldoff = 300;
             PORT_LOG("fps: 60 not held (%u of 120 pictures late): 30 fps for 10 s\n", (unsigned) sMissed);
         }
