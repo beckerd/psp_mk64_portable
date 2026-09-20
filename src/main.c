@@ -661,6 +661,38 @@ void game_init_clear_framebuffer(void) {
     clear_framebuffer(0);
 }
 
+#ifdef TARGET_PSP
+/* Where a split-frame picture's time goes outside the display-list interpreter
+ * (max_fps_experiments; the ~5.5 ms block the data/exp runs could not look
+ * into).  PORT_PROFILE builds add up each segment per half and log the averages
+ * with the frame profile. */
+enum { SEG_TICK, SEG_KARTLOAD, SEG_OBJECTS, SEG_RENDER3D, SEG_HUD, SEG_MENUITEMS, SEG_PRE, SEG_COUNT };
+static u32 sSegSum[2][SEG_COUNT], sSegPics[2], sSegT;
+#ifdef PORT_PROFILE
+#include <stdio.h>
+extern u32 port_time_us(void);
+#define SEG_START() (sSegT = port_time_us())
+#define SEG_END(seg) do { u32 now_ = port_time_us(); if (gPortHalfFrame != 0) sSegSum[gPortHalfFrame - 1][seg] += now_ - sSegT; sSegT = now_; } while (0)
+void port_seg_report(void) {
+    static const char* names[SEG_COUNT] = { "tick", "kart sprites", "objects", "3D display list", "HUD display list", "menu items", "pads+audio cmds" };
+    s32 h, k;
+    for (h = 0; h < 2; h++) {
+        char line[256];
+        s32 n = 0;
+        if (sSegPics[h] == 0) continue;
+        n += snprintf(line + n, sizeof(line) - n, "split half %c (%u pictures), us each:", h ? 'B' : 'A', (unsigned) sSegPics[h]);
+        for (k = 0; k < SEG_COUNT; k++) n += snprintf(line + n, sizeof(line) - n, " %s %u,", names[k], (unsigned) (sSegSum[h][k] / sSegPics[h]));
+        PORT_LOG("%s\n", line);
+        sSegPics[h] = 0;
+        for (k = 0; k < SEG_COUNT; k++) sSegSum[h][k] = 0;
+    }
+}
+#else
+#define SEG_START() ((void) 0)
+#define SEG_END(seg) ((void) 0)
+#endif
+#endif
+
 void race_logic_loop(void) {
     s16 i;
     u16 rotY;
@@ -700,6 +732,8 @@ port_second_half:
 #ifdef TARGET_PSP
             if (gPortHalfFrame != 0) {
                 /* the 1P frame below, one tick per picture */
+                sSegPics[gPortHalfFrame - 1]++;
+                SEG_START();
                 if (gPortHalfFrame == 1) {
                     replays_loop();
                 }
@@ -717,20 +751,24 @@ port_second_half:
                     update_course_actors();
                     course_update_water();
                     func_8028FCBC();
+                    SEG_END(SEG_TICK);
                     /* The kart sprite loader fills the buffers of this picture's
                      * gfx pool, so both halves need it (render-side only). */
                     func_80022744();
+                    SEG_END(SEG_KARTLOAD);
                 }
                 /* Objects and HUD: updated once per frame (second half); the
                  * first half only prepares this picture's render state, as the
                  * paused game does. */
                 func_8005A070();
+                SEG_END(SEG_OBJECTS);
                 if (gPortHalfFrame == 2) {
                     sNumVBlanks = 0;
                 }
                 profiler_log_thread5_time(LEVEL_SCRIPT_EXECUTE);
                 D_8015F788 = 0;
                 render_player_one_1p_screen();
+                SEG_END(SEG_RENDER3D);
                 break;
             }
 #endif
@@ -999,9 +1037,18 @@ port_second_half:
             }
         }
     }
+#ifdef TARGET_PSP
+    SEG_START();
+#endif
     func_802A4300();
     func_800591B4();
+#ifdef TARGET_PSP
+    SEG_END(SEG_HUD);
+#endif
     func_80093E20();
+#ifdef TARGET_PSP
+    SEG_END(SEG_MENUITEMS);
+#endif
 #if DVDL
     display_dvdl();
 #endif
@@ -1616,6 +1663,7 @@ void port_game_loop_one_iteration(void) {
     }
     PORT_TRACE("iteration start (timer %d)\n", gGlobalTimer);
     port_split_stats();
+    SEG_START();
     if (gPortHalfFrame == 1) {
         /* The second half of a split frame: the frame's audio commands, state
          * change and pad read were its first half's. */
@@ -1638,6 +1686,7 @@ void port_game_loop_one_iteration(void) {
     gPortHalfFrame = port_frame_can_split() ? 1 : 0;
     }
     gPortVblanksPerFrame = gPortHalfFrame != 0 ? 1 : 2;
+    SEG_END(SEG_PRE); /* audio commands, state change, gfx pool, pads -- a first half's; a second half's is the pool alone */
     gPortLogDefer = gGamestate == RACING && gIsGamePaused == 0; /* no memory-stick stalls in a race */
     if (!gPortLogDefer) {
         port_log_flush();

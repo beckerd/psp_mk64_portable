@@ -206,6 +206,9 @@ void port_profile_add(int slot, u32 us) {
         extern u32 gfx_prof_rebuilds;
         extern u32 port_audio_out_underruns(void);
         PORT_LOG("audio underruns so far: %u\n", port_audio_out_underruns());
+#ifdef PORT_PROFILE
+        { extern void port_seg_report(void); port_seg_report(); } /* main.c: a split-frame picture outside the interpreter */
+#endif
 PORT_LOG("profile us/frame: logic %u  dl->ge %u (ge+vsync %u)  audio %u  total %u  (%u rebuilds)\n",
                  sum[0] / 300, sum[1] / 300, sum[2] / 300, sum[3] / 300,
                  (sum[0] + sum[1] + sum[2] + sum[3]) / 300, gfx_prof_rebuilds / 300);
