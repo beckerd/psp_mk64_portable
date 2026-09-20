@@ -165,7 +165,14 @@ s32 gPortLogDefer;
 static char sLogRam[24 * 1024];
 static u32 sLogRamUsed;
 static void log_write(const char* text);
+static u32 sLogDropped; /* bytes of older lines given up while a race filled the buffer */
 void port_log_flush(void) {
+    if (sLogDropped != 0) {
+        char note[80];
+        snprintf(note, sizeof(note), "[log: %u bytes of older race lines dropped here]\n", (unsigned) sLogDropped);
+        sLogDropped = 0;
+        log_write(note);
+    }
     if (sLogRamUsed != 0) {
         sLogRam[sLogRamUsed] = 0;
         sLogRamUsed = 0;
@@ -195,7 +202,16 @@ void port_log(const char* fmt, ...) {
             if (f != NULL) fclose(f);
         }
         if (gPortLogDefer && !sSync) {
-            if (sLogRamUsed + len + 1 > sizeof(sLogRam)) port_log_flush();
+            if (sLogRamUsed + len + 1 > sizeof(sLogRam)) {
+                /* Full in the middle of a race (about six minutes without a
+                 * pause): writing it out now is the stall this buffer exists to
+                 * avoid.  Drop the older half, at a line boundary, and say so. */
+                u32 cut = sLogRamUsed / 2;
+                while (cut < sLogRamUsed && sLogRam[cut - 1] != '\n') cut++;
+                memmove(sLogRam, sLogRam + cut, sLogRamUsed - cut);
+                sLogRamUsed -= cut;
+                sLogDropped += cut;
+            }
             memcpy(sLogRam + sLogRamUsed, buf, len);
             sLogRamUsed += len;
             return;
