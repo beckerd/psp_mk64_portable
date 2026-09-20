@@ -3822,7 +3822,7 @@ static void gfx_vfpu_outcode_selftest(void) {
         { 3.1f, 0.0f, 0.0f, 3.0f }, { 0.0f, 0.0f, 0.0f, -2.0f }, { 1.0f, 1.0f, 0.0f, -2.0f }, { -7.0f, 3.0f, 0.0f, -2.0f },
         { 100.0f, -250.0f, 5.0f, 80.0f }, { 241.0f, 0.0f, 5.0f, 80.0f }, { 0.01f, 0.01f, 0.0f, 0.05f }, { 900.0f, 4000.0f, 1.0f, 1200.0f },
     };
-    unsigned int k, bad = 0;
+    unsigned int k, bad = 0, bad_sync = 0;
     float worst = 0.0f;
     for (k = 0; k < sizeof(tv) / sizeof(tv[0]); k++) {
         float v[4] __attribute__((aligned(16))) = { tv[k][0], tv[k][1], tv[k][2], tv[k][3] };
@@ -3841,6 +3841,21 @@ static void gfx_vfpu_outcode_selftest(void) {
         );
         if (px > pw) ce |= 1; if (py > pw) ce |= 2; if (-px > pw) ce |= 4; if (-py > pw) ce |= 8;
         if (px > gw) cg |= 1; if (py > gw) cg |= 2; if (-px > gw) cg |= 4; if (-py > gw) cg |= 8;
+        {
+            /* Variant B: vsync (wait for the VFPU pipeline) before each read.
+             * Hardware showed variant A reading the PREVIOUS compare's bits. */
+            uint32_t e2 = 0, g2 = 0;
+            __asm__ volatile (
+                "lv.q    c100, %2\n"
+                "vmov.p  c000, c100\n" "vneg.p  c002, c100\n"
+                "vone.q  c010\n" "vscl.q  c010, c010, s103\n"
+                "vcmp.q  GT, c000, c010\n" "vsync\n" "mfvc    %0, $131\n"
+                "vfim.s  s020, 3.0\n" "vscl.q  c010, c010, s020\n"
+                "vcmp.q  GT, c000, c010\n" "vsync\n" "mfvc    %1, $131\n"
+                : "=r"(e2), "=r"(g2) : "m"(*v)
+            );
+            if ((e2 & 0xF) != ce || (g2 & 0xF) != cg) bad_sync++;
+        }
         if ((e & 0xF) != ce || (g & 0xF) != cg) {
             bad++;
             port_log("vfpu outcodes: MISMATCH for (%g %g %g): edge %X vs C %X, guard %X vs C %X\n", px, py, pw, (unsigned) (e & 0xF), (unsigned) ce, (unsigned) (g & 0xF), (unsigned) cg);
@@ -3852,7 +3867,7 @@ static void gfx_vfpu_outcode_selftest(void) {
             if (err > worst) worst = err;
         }
     }
-    port_log("vfpu outcodes selftest: %u of %u vertices differ from the C compares; vrcp worst relative error %g\n", bad, (unsigned) (sizeof(tv) / sizeof(tv[0])), worst);
+    port_log("vfpu outcodes selftest: %u of %u vertices differ from the C compares (%u with vsync before the read); vrcp worst relative error %g\n", bad, (unsigned) (sizeof(tv) / sizeof(tv[0])), bad_sync, worst);
 }
 
 void gfx_init(struct GfxWindowManagerAPI *wapi, struct GfxRenderingAPI *rapi, const char *game_name, bool start_in_fullscreen) {
