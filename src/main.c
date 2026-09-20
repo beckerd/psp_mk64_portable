@@ -1461,25 +1461,30 @@ static void port_split_stats(void) {
      * GOV_FLOOR, and let it straight back out after a clean second.  (Its first
      * version also reacted to the average busy time and sat at 1200 of 3000 for
      * whole races with no late picture at all: far too visible.) */
-#define GOV_FLOOR 2400.0f
+#define GOV_FLOOR 2600.0f
+#define GOV_CEIL 5000.0f /* PORT_DRAW_DIST (3000) is where a race starts, not the limit: with headroom, draw further */
     {
-        static u32 sGovN, sGovLate;
+        static u32 sGovN, sGovLate, sGovBusy;
         extern s32 gPortExpMode;
         if (gRaceState < RACE_IN_PROGRESS || gPortExpMode != 0) {
             gPortDrawDist = (float) PORT_DRAW_DIST;
-            sGovN = sGovLate = 0;
+            sGovN = sGovLate = sGovBusy = 0;
         } else {
             sGovN++;
+            sGovBusy += gPortLastFrameBusyUs;
             if (gPortLastFrameVblanks > 1) sGovLate++;
             if (sGovN == 60) {
+                u32 avg = sGovBusy / 60;
                 if (sGovLate >= 4) {
                     gPortDrawDist *= 0.93f;
-                    if (gPortDrawDist < GOV_FLOOR) gPortDrawDist = GOV_FLOOR;
-                } else if (sGovLate == 0) {
-                    gPortDrawDist *= 1.10f;
-                    if (gPortDrawDist > (float) PORT_DRAW_DIST) gPortDrawDist = (float) PORT_DRAW_DIST;
+                } else if (gPortDrawDist > (float) PORT_DRAW_DIST && (sGovLate >= 2 || avg > 15300)) {
+                    gPortDrawDist *= 0.95f; /* the extra distance is the first thing to give back */
+                } else if (sGovLate == 0 && (gPortDrawDist < (float) PORT_DRAW_DIST || avg < 13800)) {
+                    gPortDrawDist *= gPortDrawDist < (float) PORT_DRAW_DIST ? 1.10f : 1.05f;
                 }
-                sGovN = sGovLate = 0;
+                if (gPortDrawDist < GOV_FLOOR) gPortDrawDist = GOV_FLOOR;
+                if (gPortDrawDist > GOV_CEIL) gPortDrawDist = GOV_CEIL;
+                sGovN = sGovLate = sGovBusy = 0;
             }
         }
     }
