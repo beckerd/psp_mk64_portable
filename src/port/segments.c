@@ -156,6 +156,22 @@ void* port_seg_to_ptr(uintptr_t addr) {
 
 extern u32 port_time_us(void);
 static u32 sLogCostMs;
+/* A memory-stick write holds the game for tens of milliseconds -- several
+ * pictures at 60 fps.  While gPortLogDefer is set (main.c: an unpaused race)
+ * lines collect here and reach the file when the race pauses or ends, or when
+ * the buffer fills.  A crash in a race loses them; an empty data/logsync file
+ * writes every line through as before. */
+s32 gPortLogDefer;
+static char sLogRam[24 * 1024];
+static u32 sLogRamUsed;
+static void log_write(const char* text);
+void port_log_flush(void) {
+    if (sLogRamUsed != 0) {
+        sLogRam[sLogRamUsed] = 0;
+        sLogRamUsed = 0;
+        log_write(sLogRam);
+    }
+}
 void port_log(const char* fmt, ...) {
     char buf[256];
     va_list ap;
@@ -165,6 +181,25 @@ void port_log(const char* fmt, ...) {
     vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
     va_end(ap);
     fputs(buf, stdout);
+    {
+        static s32 sSync = -1;
+        u32 len = (u32) strlen(buf);
+        if (sSync < 0) {
+            FILE* f = fopen(port_save_path("logsync"), "rb");
+            sSync = f != NULL;
+            if (f != NULL) fclose(f);
+        }
+        if (gPortLogDefer && !sSync) {
+            if (sLogRamUsed + len + 1 > sizeof(sLogRam)) port_log_flush();
+            memcpy(sLogRam + sLogRamUsed, buf, len);
+            sLogRamUsed += len;
+            return;
+        }
+        port_log_flush();
+    }
+    log_write(buf);
+}
+static void log_write(const char* buf) {
     /* The PSP's FAT driver only updates the directory entry (the visible file
      * size) on close, so a HOME exit or a crash used to leave log.txt
      * truncated at the last close.  Close and reopen at most twice a second:

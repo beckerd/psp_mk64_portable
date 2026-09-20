@@ -49,6 +49,7 @@ static int sRunning = 1;
 static int exit_callback(UNUSED int arg1, UNUSED int arg2, UNUSED void* common) {
     extern void port_me_stop(void);
     port_me_stop(); /* park the Media Engine: its loop polls memory that is about to be freed */
+    port_log_flush(); /* a race's log lines are held in RAM */
     sRunning = 0;
     sceKernelExitGame();
     return 0;

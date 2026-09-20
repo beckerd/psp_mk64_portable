@@ -96,6 +96,11 @@ extern s32 gPortHalfFrame;
 extern s32 gPortVblanksPerFrame;  /* what end_frame waits for: 2 (30 fps) or 1 (60 fps) */
 extern s32 gPortLastFrameVblanks; /* how many the last frame actually took */
 extern u32 gPortLastFrameBusyUs;  /* its CPU+GE time, the vblank wait excluded */
+/* The draw-distance cull (gfx_pc.c), in clip.w units: PORT_DRAW_DIST at most,
+ * pulled in by the 60 fps governor (main.c) while pictures arrive late. */
+extern float gPortDrawDist;
+extern s32 gPortLogDefer;         /* port_log buffers in RAM (an unpaused race) */
+void port_log_flush(void);
 
 /* Frame hooks implemented by the platform backend. */
 void port_gfx_run(Gfx* dl);        // execute a display list (F3DEX -> sceGu)

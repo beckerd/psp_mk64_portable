@@ -2305,6 +2305,11 @@ static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct Loade
 }
 #endif
 
+#ifdef PORT_DRAW_DIST
+float gPortDrawDist = (float) (PORT_DRAW_DIST);
+#else
+float gPortDrawDist = 1.0e9f;
+#endif
 static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
 #ifdef PORT_EXP_NOTRI
     return;
@@ -2326,7 +2331,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     // (clip.w grows with distance).  Cuts the far scenery the wide intro camera
     // would otherwise draw -> big win on heavy intros; also drops the distant
     // sky-streaks.  v->_w holds clip.w.
-    if (v1->_w > (float) (PORT_DRAW_DIST) && v2->_w > (float) (PORT_DRAW_DIST) && v3->_w > (float) (PORT_DRAW_DIST)) {
+    if (v1->_w > gPortDrawDist && v2->_w > gPortDrawDist && v3->_w > gPortDrawDist) {
         return;
     }
 #endif

@@ -1455,14 +1455,33 @@ static void port_split_stats(void) {
     sBusySum += gPortLastFrameBusyUs;
     if (gPortLastFrameBusyUs > sBusyMax) sBusyMax = gPortLastFrameBusyUs;
     if (gPortLastFrameVblanks > 1) sMissed++;
+    /* The governor: every half second, pull the draw distance in while
+     * pictures are late, let it out again while there is headroom. */
+    {
+        static u32 sGovN, sGovLate, sGovBusy;
+        sGovN++;
+        sGovBusy += gPortLastFrameBusyUs;
+        if (gPortLastFrameVblanks > 1) sGovLate++;
+        if (sGovN == 30) {
+            u32 avg = sGovBusy / 30;
+            if (sGovLate >= 2 || avg > 15800) {
+                gPortDrawDist *= sGovLate >= 6 ? 0.80f : 0.90f;
+                if (gPortDrawDist < 1200.0f) gPortDrawDist = 1200.0f;
+            } else if (sGovLate == 0 && avg < 13500 && gPortDrawDist < (float) PORT_DRAW_DIST) {
+                gPortDrawDist *= 1.05f;
+                if (gPortDrawDist > (float) PORT_DRAW_DIST) gPortDrawDist = (float) PORT_DRAW_DIST;
+            }
+            sGovN = sGovLate = sGovBusy = 0;
+        }
+    }
     if (sHalves == 120) {
         if (sMissed > 30) {
             sPortSplitHoldoff = 300;
             PORT_LOG("fps: 60 not held (%u of 120 pictures late): 30 fps for 10 s\n", (unsigned) sMissed);
         }
         if (sLogHalves >= 600 || sMissed > 30) {
-            PORT_LOG("fps: split frames: busy %u us avg, %u max per picture (16667 = 60 fps), %u of 120 late\n",
-                     (unsigned) (sBusySum / sHalves), (unsigned) sBusyMax, (unsigned) sMissed);
+            PORT_LOG("fps: split frames: busy %u us avg, %u max per picture (16667 = 60 fps), %u of 120 late, draw distance %d\n",
+                     (unsigned) (sBusySum / sHalves), (unsigned) sBusyMax, (unsigned) sMissed, (int) gPortDrawDist);
             sLogHalves = 0;
         }
         sHalves = sMissed = sBusySum = sBusyMax = 0;
@@ -1504,6 +1523,11 @@ void port_game_loop_one_iteration(void) {
     gPortHalfFrame = port_frame_can_split() ? 1 : 0;
     }
     gPortVblanksPerFrame = gPortHalfFrame != 0 ? 1 : 2;
+    gPortLogDefer = gGamestate == RACING && gIsGamePaused == 0; /* no memory-stick stalls in a race */
+    if (!gPortLogDefer) {
+        port_log_flush();
+        gPortDrawDist = (float) PORT_DRAW_DIST; /* the governor starts every race from the full distance */
+    }
     PORT_TRACE(" game_state_handler (state %d, menu %d)\n", gGamestate, gMenuSelection);
 #ifdef PORT_PROFILE
     {

@@ -248,6 +248,8 @@ $(BUILD_DIR)/%.inc.c: %.inc.c tools/psp/swap_u16_inc.py
 	@mkdir -p $(dir $@)
 	$(V)$(PYTHON) tools/psp/swap_u16_inc.py $< $@
 
+# So does the display-list interpreter and its GE backend (max_fps_experiments).
+$(BUILD_DIR)/src/port/gfx/gfx_pc.o $(BUILD_DIR)/src/port/psp/gfx_scegu.o: CFLAGS += -O3
 # Hot audio code gets the heavier optimisation level.
 $(BUILD_DIR)/src/port/audio/mixer.o $(BUILD_DIR)/src/audio/synthesis.o: CFLAGS += -O3 -funroll-loops
 
