@@ -1461,26 +1461,27 @@ static void port_split_stats(void) {
      * GOV_FLOOR, and let it straight back out after a clean second.  (Its first
      * version also reacted to the average busy time and sat at 1200 of 3000 for
      * whole races with no late picture at all: far too visible.) */
-#define GOV_FLOOR 2600.0f
-#define GOV_CEIL 5000.0f /* PORT_DRAW_DIST (3000) is where a race starts, not the limit: with headroom, draw further */
+#define GOV_FLOOR ((float) PORT_DRAW_DIST) /* never nearer than the 30 fps build draws: on DK's Jungle Parkway a floor of
+                                            * 2600 sat right on the far backdrop, which popped in and out as this breathed */
+#define GOV_CEIL 5000.0f
     {
-        static u32 sGovN, sGovLate, sGovBusy;
+        static u32 sGovN, sGovLate, sGovBusy, sGovHold;
         extern s32 gPortExpMode;
         if (gRaceState < RACE_IN_PROGRESS || gPortExpMode != 0) {
             gPortDrawDist = (float) PORT_DRAW_DIST;
-            sGovN = sGovLate = sGovBusy = 0;
+            sGovN = sGovLate = sGovBusy = sGovHold = 0;
         } else {
             sGovN++;
             sGovBusy += gPortLastFrameBusyUs;
             if (gPortLastFrameVblanks > 1) sGovLate++;
             if (sGovN == 60) {
                 u32 avg = sGovBusy / 60;
-                if (sGovLate >= 4) {
+                if (sGovHold > 0) sGovHold--;
+                if (gPortDrawDist > GOV_FLOOR && (sGovLate >= 2 || avg > 15300)) {
                     gPortDrawDist *= 0.93f;
-                } else if (gPortDrawDist > (float) PORT_DRAW_DIST && (sGovLate >= 2 || avg > 15300)) {
-                    gPortDrawDist *= 0.95f; /* the extra distance is the first thing to give back */
-                } else if (sGovLate == 0 && (gPortDrawDist < (float) PORT_DRAW_DIST || avg < 13800)) {
-                    gPortDrawDist *= gPortDrawDist < (float) PORT_DRAW_DIST ? 1.10f : 1.05f;
+                    sGovHold = 15; /* no growing again for 15 s: the edge must not move in and out */
+                } else if (sGovLate == 0 && avg < 13800 && sGovHold == 0) {
+                    gPortDrawDist *= 1.04f;
                 }
                 if (gPortDrawDist < GOV_FLOOR) gPortDrawDist = GOV_FLOOR;
                 if (gPortDrawDist > GOV_CEIL) gPortDrawDist = GOV_CEIL;
@@ -1516,11 +1517,11 @@ static void port_split_stats(void) {
         }
     }
     if (sHalves == 120) {
-        if (sMissed > 30) {
+        if (sMissed > 14) { /* over an eighth late: the game would run visibly slow */
             sPortSplitHoldoff = 300;
             PORT_LOG("fps: 60 not held (%u of 120 pictures late): 30 fps for 10 s\n", (unsigned) sMissed);
         }
-        if (sLogHalves >= 600 || sMissed > 30) {
+        if (sLogHalves >= 600 || sMissed > 14) {
             PORT_LOG("fps: split frames: busy %u us avg, %u max per picture (16667 = 60 fps), %u of 120 late, draw distance %d\n",
                      (unsigned) (sBusySum / sHalves), (unsigned) sBusyMax, (unsigned) sMissed, (int) gPortDrawDist);
             sLogHalves = 0;
