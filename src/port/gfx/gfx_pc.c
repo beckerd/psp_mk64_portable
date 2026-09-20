@@ -645,6 +645,7 @@ static int hud_class(float x0, float x1) {
     return cls;
 }
 s32 gPortExpMode;
+s32 gPortOldClip; /* data/oldclip (main.c): the clipper runs all seven planes again, for comparing on hardware */
 /* data/exp event counts, per report: [0] triangles in, [1] rejected by outcode
  * or near/far flags, [2] back-face culled, [3] sent to the CPU clipper, [4]
  * emitted, [5] state rebuilds, [6] texture imports, [7] imports that uploaded
@@ -1790,6 +1791,9 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                 {
                     float wz2 = (1.0f - GE_DEPTH_EPS) * proj_vec[3];
                     uint32_t oc = (cc_edge & 0xF) | (cc_guard & 0xF) << 4;
+                    if (gPortOldClip && (proj_vec[3] < GE_TL_NEAR || proj_vec[2] + wz2 < 0.0f || wz2 - proj_vec[2] < 0.0f)) {
+                        oc &= ~0xFu; /* data/oldclip: screen-edge rejects only for vertices inside the depth range, as before */
+                    }
                     if (proj_vec[3] > gPortDrawDist) oc |= VOC_FAR;
                     if (proj_vec[3] < GE_TL_NEAR) oc |= VOC_NEARW;
                     if (proj_vec[2] + wz2 < 0.0f) oc |= VOC_ZNEAR;
@@ -2383,8 +2387,8 @@ static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct Loade
      * triangles come through here on DK's Jungle Parkway. */
     uint32_t m = (a->oc | b->oc | c->oc) & VOC_CLIP;
     int n = 3, i;
-    if (rsp.is_persp == 0 || m == 0) {
-        m = VOC_CLIP; /* no outcodes for this vertex kind: every plane, as before */
+    if (rsp.is_persp == 0 || m == 0 || gPortOldClip) {
+        m = VOC_CLIP; /* no outcodes for this vertex kind (or data/oldclip): every plane, as before */
     }
     bufA[0] = *a; bufA[1] = *b; bufA[2] = *c;
 

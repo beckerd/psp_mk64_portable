@@ -1503,7 +1503,16 @@ static void port_split_stats(void) {
         static s32 sExpOn = -1;
         static u32 sExpPic, sExpTotal, sExpSum[7], sExpN[7], sExpLate[7];
         extern int gExpDirectEmitOff;
+        extern s32 gPortOldClip;
         static s32 sNoDirect = -1;
+        static s32 sOldClipRead;
+        if (!sOldClipRead) {
+            FILE* of = fopen(port_save_path("oldclip"), "rb");
+            sOldClipRead = 1;
+            gPortOldClip = of != NULL;
+            if (of != NULL) fclose(of);
+            if (gPortOldClip) PORT_LOG("gfx: data/oldclip: the clipper runs all seven planes\n");
+        }
         if (sNoDirect < 0) { /* data/nodirect: batches go through the staging copy again (if direct emit misbehaves on hardware) */
             FILE* nf = fopen(port_save_path("nodirect"), "rb");
             sNoDirect = nf != NULL;
