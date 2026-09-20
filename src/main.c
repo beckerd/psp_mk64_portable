@@ -1512,6 +1512,13 @@ static void port_split_stats(void) {
             gPortOldClip = of != NULL;
             if (of != NULL) fclose(of);
             if (gPortOldClip) PORT_LOG("gfx: data/oldclip: the clipper runs all seven planes\n");
+            {
+                extern s32 gPortVfpuOutcodes;
+                FILE* vf = fopen(port_save_path("vfpuoc"), "rb");
+                gPortVfpuOutcodes = vf != NULL;
+                if (vf != NULL) fclose(vf);
+                if (gPortVfpuOutcodes) PORT_LOG("gfx: data/vfpuoc: vertex flags from the VFPU compare\n");
+            }
         }
         if (sNoDirect < 0) { /* data/nodirect: batches go through the staging copy again (if direct emit misbehaves on hardware) */
             FILE* nf = fopen(port_save_path("nodirect"), "rb");

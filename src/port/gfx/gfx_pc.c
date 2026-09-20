@@ -645,6 +645,7 @@ static int hud_class(float x0, float x1) {
     return cls;
 }
 s32 gPortExpMode;
+s32 gPortVfpuOutcodes; /* data/vfpuoc (main.c): per-vertex flags from the VFPU compare instead of C compares */
 s32 gPortOldClip; /* data/oldclip (main.c): the clipper runs all seven planes again, for comparing on hardware */
 /* data/exp event counts, per report: [0] triangles in, [1] rejected by outcode
  * or near/far flags, [2] back-face culled, [3] sent to the CPU clipper, [4]
@@ -1771,28 +1772,56 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                  * one compare, the same against GE_GUARD_NDC * w is the guard
                  * band (its "any" bit), and vrcp replaces the divide for the
                  * projected position, stored straight into the vertex. */
-                uint32_t cc_edge, cc_guard;
+                uint32_t cc_edge = 0, cc_guard = 0;
+                if (gPortVfpuOutcodes) {
+                    /* data/vfpuoc: the flags from the VFPU compare's condition
+                     * register.  Pixel-identical in PPSSPP, but on hardware the
+                     * first clean pictures showed ground triangles vanishing, and
+                     * mfvc straight after vcmp is the one step never proven
+                     * there: off by default until it is. */
                 __asm__ volatile (
-                    "vmov.p  c000, c100\n"          /* s000 s001 =  x  y */
-                    "vneg.p  c002, c100\n"          /* s002 s003 = -x -y */
-                    "vone.q  c010\n"
-                    "vscl.q  c010, c010, s103\n"    /* w w w w */
-                    "vcmp.q  GT, c000, c010\n"
-                    "mfvc    %1, $131\n"
-                    "vfim.s  s020, 3.0\n"           /* GE_GUARD_NDC */
-                    "vscl.q  c010, c010, s020\n"
-                    "vcmp.q  GT, c000, c010\n"
-                    "mfvc    %2, $131\n"
-                    "vrcp.s  s020, s103\n"
-                    "vscl.p  c030, c100, s020\n"    /* x/w y/w */
-                    "sv.q    c030, 48 + %0\n"       /* sx sy (oc and its pad are written below); *d is in-out: only this row is touched */
-                    : "+m"(*d), "=r"(cc_edge), "=r"(cc_guard) :
-                );
+                        "vmov.p  c000, c100\n"          /* s000 s001 =  x  y */
+                        "vneg.p  c002, c100\n"          /* s002 s003 = -x -y */
+                        "vone.q  c010\n"
+                        "vscl.q  c010, c010, s103\n"    /* w w w w */
+                        "vcmp.q  GT, c000, c010\n"
+                        "mfvc    %1, $131\n"
+                        "vfim.s  s020, 3.0\n"           /* GE_GUARD_NDC */
+                        "vscl.q  c010, c010, s020\n"
+                        "vcmp.q  GT, c000, c010\n"
+                        "mfvc    %2, $131\n"
+                        "vrcp.s  s020, s103\n"
+                        "vscl.p  c030, c100, s020\n"    /* x/w y/w */
+                        "sv.q    c030, 48 + %0\n"       /* sx sy (oc and its pad are written below); *d is in-out: only this row is touched */
+                        : "+m"(*d), "=r"(cc_edge), "=r"(cc_guard) :
+                    );
+                } else {
+                    float px = proj_vec[0], py = proj_vec[1], pw = proj_vec[3];
+                    float gw = GE_GUARD_NDC * pw;
+                    if (px > pw) cc_edge |= 1;
+                    if (py > pw) cc_edge |= 2;
+                    if (-px > pw) cc_edge |= 4;
+                    if (-py > pw) cc_edge |= 8;
+                    if (px > gw) cc_guard |= 1;
+                    if (py > gw) cc_guard |= 2;
+                    if (-px > gw) cc_guard |= 4;
+                    if (-py > gw) cc_guard |= 8;
+                    if (pw > 0.0f) {
+                        float iw = 1.0f / pw;
+                        d->sx = px * iw;
+                        d->sy = py * iw;
+                    } else {
+                        d->sx = d->sy = 0.0f; /* never used: the winding test needs all three in front of the eye */
+                    }
+                }
                 {
                     float wz2 = (1.0f - GE_DEPTH_EPS) * proj_vec[3];
                     uint32_t oc = (cc_edge & 0xF) | (cc_guard & 0xF) << 4;
-                    if (gPortOldClip && (proj_vec[3] < GE_TL_NEAR || proj_vec[2] + wz2 < 0.0f || wz2 - proj_vec[2] < 0.0f)) {
-                        oc &= ~0xFu; /* data/oldclip: screen-edge rejects only for vertices inside the depth range, as before */
+                    if (proj_vec[3] < GE_TL_NEAR || proj_vec[2] + wz2 < 0.0f || wz2 - proj_vec[2] < 0.0f) {
+                        /* Screen-edge rejects only for vertices inside the depth
+                         * range, as on every build that showed a clean picture on
+                         * hardware.  (In theory the test holds for any w.) */
+                        oc &= ~0xFu;
                     }
                     if (proj_vec[3] > gPortDrawDist) oc |= VOC_FAR;
                     if (proj_vec[3] < GE_TL_NEAR) oc |= VOC_NEARW;
@@ -2390,6 +2419,11 @@ static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct Loade
     if (rsp.is_persp == 0 || m == 0 || gPortOldClip) {
         m = VOC_CLIP; /* no outcodes for this vertex kind (or data/oldclip): every plane, as before */
     }
+    /* The two depth planes always run, as they always did: the GE drops a whole
+     * triangle if one vertex is a rounding error outside its depth range, and a
+     * vertex made by the near-plane pass can be.  Only the near pass and the four
+     * guard-band passes are skipped when no vertex needs them. */
+    m |= VOC_ZNEAR | VOC_ZFAR;
     bufA[0] = *a; bufA[1] = *b; bufA[2] = *c;
 
     // Near plane: keep the portion with clip.w >= GE_TL_NEAR.
