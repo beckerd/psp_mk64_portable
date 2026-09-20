@@ -149,7 +149,14 @@ void discard_sequence(s32 seqId) {
 void* soundAlloc(struct SoundAllocPool* pool, u32 size) {
     u8* start;
     u8* pos;
+#ifdef TARGET_PSP
+    /* Whole 64-byte cache lines per allocation: the mixer may run on the Media
+     * Engine (port/audio/mix_jobs.h), and a line one processor writes back
+     * (note state, reverb, the output buffers) must not hold the other's data. */
+    u32 alignedSize = (size + 63) & ~63u;
+#else
     u32 alignedSize = ALIGN16(size);
+#endif
 
     start = pool->cur;
     if (start + alignedSize <= pool->start + pool->size) {
@@ -159,6 +166,9 @@ void* soundAlloc(struct SoundAllocPool* pool, u32 size) {
         }
     } else {
         // eu_stubbed_printf_1("Heap OverFlow : Not Allocate %d!\n", size);
+#ifdef TARGET_PSP
+        { extern void port_log(const char* fmt, ...); port_log("audio: heap overflow: %u bytes not allocated (pool %u of %u used)\n", (unsigned) size, (unsigned) (pool->cur - pool->start), (unsigned) pool->size); }
+#endif
         return NULL;
     }
     pool->numAllocatedEntries++;
@@ -166,7 +176,11 @@ void* soundAlloc(struct SoundAllocPool* pool, u32 size) {
 }
 
 void sound_alloc_pool_init(struct SoundAllocPool* pool, void* memAddr, u32 size) {
+#ifdef TARGET_PSP
+    pool->cur = pool->start = (u8*) (((uintptr_t) memAddr + 63) & ~(uintptr_t) 63);
+#else
     pool->cur = pool->start = (u8*) ALIGN16((uintptr_t) memAddr);
+#endif
     pool->size = size;
     pool->numAllocatedEntries = 0;
 }

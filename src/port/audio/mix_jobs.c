@@ -8,6 +8,7 @@
 
 extern unsigned int port_time_us(void);
 
+_Static_assert(sizeof(MixJob) % 64 == 0 && sizeof(MixShared) == 64, "whole cache lines");
 MixJob gMixJobs[MIXJ_JOBS] __attribute__((aligned(64)));
 MixShared gMixShared __attribute__((aligned(64)));
 
@@ -126,6 +127,7 @@ void port_mix_submit(void) {
         extern void sceKernelDcacheWritebackAll(void);
         sceKernelDcacheWritebackAll(); /* the job, and any sample data loaded this frame, reach RAM before the ME reads them */
         SHARED->submitted = sRecId + 1;
+        port_me_kick(); /* a running task picks the job up by itself */
     } else {
         mix_job_execute(sRec, 0);
         SHARED->submitted = sRecId + 1;
@@ -140,7 +142,8 @@ static void wait_for(uint32_t target) {
     if (!sUseMe || (int32_t) (SHARED->completed - target) >= 0) return;
     t0 = port_time_us();
     while ((int32_t) (SHARED->completed - target) < 0) {
-        if (port_time_us() - t0 > 250000u) {
+        port_me_kick(); /* the task may have ended just as the job was submitted */
+        if (port_time_us() - t0 > 500000u) {
             /* The ME stopped answering: finish on the main CPU and stay there. */
             PORT_LOG("audio: the Media Engine timed out at job %u of %u: back to the main CPU\n", (unsigned) SHARED->completed, (unsigned) target);
             port_me_stop();

@@ -18,9 +18,12 @@
 #define MIXJ_JOBS 4          /* ring; at most 3 are ever in flight */
 #define MIXJ_WORDS 16384     /* command words per job (64 KB) */
 
+/* Both structs fill whole 64-byte cache lines: a line one processor writes
+ * back must never hold the other's data. */
 typedef struct {
     uint32_t nwords;
     uint32_t words[MIXJ_WORDS];
+    uint32_t line_pad[15];
 } MixJob;
 
 /* Shared between the two processors: accessed uncached on both sides. */
@@ -29,14 +32,15 @@ typedef struct {
     volatile uint32_t completed; /* jobs finished (the executor writes) */
     volatile uint32_t alive;     /* the ME's handshake */
     volatile uint32_t stop;
+    uint32_t line_pad[12];
 } MixShared;
 
 extern MixJob gMixJobs[MIXJ_JOBS];
 extern MixShared gMixShared;
 
-/* Run one job.  ptr_mask is OR-ed into every memory argument: 0 on the main
- * CPU, 0x40000000 (the uncached alias) on the ME, whose cache never sees the
- * main CPU's writes. */
+/* Run one job.  ptr_mask is OR-ed into every memory argument (0: both
+ * processors run jobs through their caches; the ME flushes and invalidates its
+ * own around each job, psp/me_audio.c). */
 void mix_job_execute(const MixJob* job, uint32_t ptr_mask);
 
 /* port_eu.c hooks */
@@ -47,5 +51,6 @@ void port_mix_drain(void);           /* before an audio reset frees what jobs po
 
 /* ME backend (me_audio.c); stubs when not built in */
 int port_me_start(void);             /* 1 = the ME is executing jobs */
+void port_me_kick(void);             /* start an ME task if jobs are pending and it is idle */
 void port_me_stop(void);
 #endif

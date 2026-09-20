@@ -155,11 +155,7 @@ $(BUILD_DIR)/assets/code/startup_logo/startup_logo.o: CFLAGS += -Dreflection_map
 # Only the extra libraries: psp-gcc's default spec appends -lc/-lpspuser/... last.
 # Listing those again scans the stub archives twice, which splits each SDK
 # library's import stubs into two runs and psp-fixup-imports then bails out.
-# -DPORT_ME_AUDIO (src/port/psp/me_audio.c): the mixer on the Media Engine.
-ifneq (,$(findstring PORT_ME_AUDIO,$(EXTRA_CFLAGS)))
-  ME_LIBS := -lme-core
-endif
-LIBS    := $(ME_LIBS) -lpspgu -lpspgum -lpspvfpu -lpspmath -lpspctrl -lpspge -lpspdisplay -lpspaudio -lpsppower -lpspdebug \
+LIBS    := -lpspgu -lpspgum -lpspvfpu -lpspmath -lpspctrl -lpspge -lpspdisplay -lpspaudio -lpsppower -lpspdebug \
            -lpspnet -lpspnet_adhoc -lpspnet_adhocctl -lpsputility -lpspwlan
 
 #==============================================================================#
@@ -185,7 +181,13 @@ ASSET_SECTION_PROGBITS = .assetdata : ALIGN(16) { __assets_start = .; *(.assetda
 
 
 default: all
-all: $(EBOOT) $(ASSETS_BIN)
+all: $(EBOOT) $(ASSETS_BIN) $(BUILD_DIR)/mk64k.prx
+
+# mk64k.prx: the kernel-mode helper that boots the Media Engine for
+# -DPORT_ME_AUDIO builds (src/port/psp/me.c); it goes next to the EBOOT.
+$(BUILD_DIR)/mk64k.prx: tools/psp/mekprx/mek.c tools/psp/mekprx/me_stub.S tools/psp/mekprx/Makefile src/port/psp/me_share.h
+	$(V)$(MAKE) -C tools/psp/mekprx
+	$(V)cp tools/psp/mekprx/mk64k.prx $@
 
 # Slow (minutes): find, for every asset symbol, how it derives from the ROM.
 # Needed only when the set of assets changes.  Keeps its mio0 cache in build/.

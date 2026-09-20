@@ -80,7 +80,11 @@ static struct {
         int16_t as_s16[BUF_SIZE / sizeof(int16_t)];
         uint8_t as_u8[BUF_SIZE];
     } buf;
-} rspa;
+    /* The Media Engine may own this state (mix_jobs.h): 64-aligned with a
+     * spare line at the end, so no cache line either processor writes back
+     * holds the other's data. */
+    uint8_t line_pad[64];
+} rspa __attribute__((aligned(64)));
 
 static int16_t resample_table[64][4] = {
     {0x0c39, 0x66ad, 0x0d46, 0xffdf}, {0x0b39, 0x6696, 0x0e5f, 0xffd8},

@@ -1,81 +1,64 @@
 /**
- * The mixer on the PSP's Media Engine (port/audio/mix_jobs.h).
- *
- * The ME is a second MIPS core with its own caches and no operating system.
- * libme-core (mcidclan's me-core-mapper, with its kernel helper embedded)
- * boots it into meLibOnProcess() below, which runs straight out of our image:
- * a loop that takes mixer jobs off the shared ring.  Rules on that side: no
- * system call, no VFPU, and main-RAM data only through the uncached alias --
- * the main CPU writes back its data cache before it hands a job over.  The
- * mixer's own work area and tables are touched by the ME alone once it runs,
- * so they stay cached there.
- *
- * Built with -DPORT_ME_AUDIO.  Never run on hardware as of this commit.
+ * The mixer on the PSP's Media Engine (port/audio/mix_jobs.h), over the
+ * transport in me.c.  One ME task runs every job that is pending and picks up
+ * the ones submitted while it runs.  Built with -DPORT_ME_AUDIO.
  */
 #include <stdint.h>
 #include "../audio/mix_jobs.h"
 #include "../port.h"
 
 #ifdef PORT_ME_AUDIO
-#include <me-core-mapper/me-core.h>
+extern int port_me_available(void);
+extern int port_me_done(void);
+extern int port_me_begin(int (*func)(int), int param);
+extern void port_me_disable(const char* why);
+extern void port_me_park(void);
 
-static int sStarted;
-
-void meLibOnProcess(void) {
-    MixShared* sh = (MixShared*) ((uintptr_t) &gMixShared | 0x40000000u);
-    sh->alive = 1;
-    while (!sh->stop) {
-        uint32_t done = sh->completed;
-        if (done != sh->submitted) {
-            mix_job_execute((const MixJob*) ((uintptr_t) &gMixJobs[done % MIXJ_JOBS] | 0x40000000u), 0x40000000u);
-            sh->completed = done + 1;
-        } else {
-            meLibDelayPipeline();
-        }
-    }
-    sh->alive = 0;
-    for (;;) { /* parked until the main CPU puts this core back into reset (port_me_stop) */
-        meLibDelayPipeline();
+/* ME side: its whole 8 KB data cache, written back and invalidated.  The
+ * dispatch loop does this around the task; a job submitted while the task runs
+ * needs it again -- the ME may still hold the ring slot's previous contents.
+ * (A privileged instruction: never call this on the main CPU.) */
+static void me_dcache_wbinv_all(void) {
+    int i;
+    for (i = 0; i < 8192; i += 64) {
+        __builtin_allegrex_cache(0x14, i);
+        __builtin_allegrex_cache(0x14, i);
     }
 }
 
-int port_me_start(void) {
-    extern unsigned int port_time_us(void);
-    extern int sceKernelDelayThread(unsigned int us);
+/* Runs on the ME.  No system call, no logging. */
+static int me_mix_run(int unused) {
     MixShared* sh = (MixShared*) ((uintptr_t) &gMixShared | 0x40000000u);
-    unsigned int t0;
-    sh->alive = 0; sh->stop = 0;
-    sceKernelDcacheWritebackInvalidateAll(); /* our image and data as the ME will read them */
-    if (meLibDefaultInit() < 0) {
-        PORT_LOG("me: init failed (the kernel helper did not load)\n");
-        return 0;
+    int n = 0;
+    (void) unused;
+    for (;;) {
+        uint32_t done = sh->completed;
+        if (done == sh->submitted) break;
+        me_dcache_wbinv_all();
+        mix_job_execute(&gMixJobs[done % MIXJ_JOBS], 0);
+        me_dcache_wbinv_all();
+        sh->completed = done + 1;
+        n++;
     }
-    t0 = port_time_us();
-    while (!sh->alive) { /* an emulator, or a firmware that keeps the ME: never answers */
-        if (port_time_us() - t0 > 500000u) {
-            PORT_LOG("me: no answer from the Media Engine\n");
-            return 0;
-        }
-        sceKernelDelayThread(1000);
+    return n;
+}
+
+int port_me_start(void) { return port_me_available(); }
+
+/* Main CPU: start a task if jobs are pending and the ME is idle. */
+void port_me_kick(void) {
+    MixShared* sh = (MixShared*) ((uintptr_t) &gMixShared | 0x40000000u);
+    if (port_me_available() && port_me_done() && sh->completed != sh->submitted) {
+        port_me_begin(me_mix_run, 0);
     }
-    PORT_LOG("me: the Media Engine is running the mixer\n");
-    sStarted = 1;
-    return 1;
 }
 
 void port_me_stop(void) {
-    if (sStarted) {
-        extern unsigned int port_time_us(void);
-        MixShared* sh = (MixShared*) ((uintptr_t) &gMixShared | 0x40000000u);
-        unsigned int t0 = port_time_us();
-        sh->stop = 1;
-        while (sh->alive && port_time_us() - t0 < 50000u) {
-        }
-        meLibHalt(); /* hold the ME in reset: it must not run our image once we are gone */
-        sStarted = 0;
-    }
+    port_me_disable("stopped");
+    port_me_park();
 }
 #else
 int port_me_start(void) { return 0; }
+void port_me_kick(void) {}
 void port_me_stop(void) {}
 #endif
