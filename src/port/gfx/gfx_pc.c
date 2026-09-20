@@ -631,6 +631,13 @@ static int hud_class(float x0, float x1) {
     hud_prev_class = cls;
     return cls;
 }
+s32 gPortExpMode;
+/* data/exp event counts, per report: [0] triangles in, [1] rejected by outcode
+ * or near/far flags, [2] back-face culled, [3] sent to the CPU clipper, [4]
+ * emitted, [5] state rebuilds, [6] texture imports, [7] imports that uploaded
+ * (cache miss or changed contents), [8] batches flushed, [9] vertices. */
+u32 gPortExpCount[10];
+#define EXPCOUNT(i, n) do { if (gPortExpMode == 0) gPortExpCount[i] += (n); } while (0) /* the normal picture only */
 static float ge_last_mp[4][4];
 static uint32_t ge_list_used; /* bytes written to the GE list since the last (re)start */
 #ifndef GE_LIST_RECYCLE
@@ -640,6 +647,7 @@ extern void gfx_scegu_sync_pending(void);
 #endif
 static void gfx_flush(void) {
     if (buf_vbo_len > 0) {
+        EXPCOUNT(8, 1);
 #ifdef PORT_GE_TL
         // GE-list overflow guard: a heavy intro (e.g. Toad's Turnpike GP) can
         // exceed the command list; overflowing corrupts memory -> white-screen
@@ -1307,8 +1315,8 @@ static void import_texture_any(int tile, uint8_t mirror) {
     gfx_debug_dump_texture(NULL, out32, width, height, fmt, siz, src);
 }
 
-extern s32 gPortExpMode; /* defined with gfx_sp_vertex below */
 static void import_texture(int tile) {
+    EXPCOUNT(6, 1);
     if (gPortExpMode == 5 && rendering_state.textures[tile] != NULL) return; /* keep whatever is bound */
     uint8_t fmt = rdp.texture_tile.fmt;
     uint8_t siz = rdp.texture_tile.siz;
@@ -1326,6 +1334,7 @@ static void import_texture(int tile) {
     if (gfx_texture_cache_lookup(tile, &rendering_state.textures[tile], rdp.loaded_texture[gfx_tex_slot(tile)].addr, fmt, siz, mirror)) {
         return;
     }
+    EXPCOUNT(7, 1);
     import_texture_any(tile, mirror);
 }
 
@@ -1541,11 +1550,11 @@ static void gfx_vfpu_lights_refresh(void) {
 /* main.c's hardware cost breakdown (data/exp): 0 = everything, 1 = no
  * triangles, 2 = no vertices either, 3 = the display list is not run, 4 =
  * triangles culled and clipped but not drawn, 5 = no texture imports. */
-s32 gPortExpMode;
 static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *vertices) {
 #ifdef PORT_EXP_NOVTX
     return;
 #endif
+    EXPCOUNT(9, (u32) n_vertices);
     if (gPortExpMode == 2) return;
     float temp_vec[4] __attribute__((aligned(16)));
     float proj_vec[4] __attribute__((aligned(16)));
@@ -1925,6 +1934,7 @@ static void gfx_eval_vertex_color(uint32_t cc_id, const struct RGBA *shade, int 
 uint32_t gfx_prof_rebuilds;
 static void gfx_tri_rebuild_state(struct LoadedVertex *v1) {
     gfx_prof_rebuilds++;
+    EXPCOUNT(5, 1);
     bool depth_test = (rsp.geometry_mode & G_ZBUFFER) == G_ZBUFFER;
     if (depth_test != rendering_state.depth_test) {
         gfx_flush();
@@ -2188,6 +2198,7 @@ static inline void gfx_emit_vertex(const struct LoadedVertex *cv, uint32_t cc_id
  * planes hundreds of times across single polygons). */
 #define GFX_MAX_UV_REPEATS 16.0f
 static void gfx_emit_triangle(const struct LoadedVertex *a, const struct LoadedVertex *b, const struct LoadedVertex *c, uint32_t cc_id, int lod, int depth) {
+    EXPCOUNT(4, 1);
     if (gPortExpMode == 4) return;
     if (tri_state.use_texture && depth < 0) { // subdivision disabled: does not fix distant-texture aliasing (needs mipmaps)
         float umin = a->u, umax = a->u, vmin = a->v, vmax = a->v;
@@ -2344,6 +2355,7 @@ static int nclip_plane(const struct LoadedVertex *in, int n, struct LoadedVertex
 }
 
 static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct LoadedVertex *b, const struct LoadedVertex *c, uint32_t cc_id, int lod) {
+    EXPCOUNT(3, 1);
     // Reject non-finite geometry up front (a bad matrix would feed garbage).
     if (!(a->_w == a->_w) || !(b->_w == b->_w) || !(c->_w == c->_w)) {
         return;
@@ -2410,6 +2422,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     return;
 #endif
     if (gPortExpMode == 1 || gPortExpMode == 2) return;
+    EXPCOUNT(0, 1);
 #ifdef PORT_PROFILE_DL
     uint32_t _pt0 = port_time_us();
 #endif
@@ -2429,6 +2442,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     // hardware, the per-triangle compares this replaces were the largest
     // renderer cost -- 4-5 ms a picture on DK's Jungle Parkway.
     if (v1->oc & v2->oc & v3->oc & VOC_REJECT) {
+        EXPCOUNT(1, 1);
         return;
     }
 #endif
@@ -2576,12 +2590,13 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
         }
         switch (rsp.geometry_mode & G_CULL_BOTH) {
             case G_CULL_FRONT:
-                if (cross <= 0) return;
+                if (cross <= 0) { EXPCOUNT(2, 1); return; }
                 break;
             case G_CULL_BACK:
-                if (cross >= 0) return;
+                if (cross >= 0) { EXPCOUNT(2, 1); return; }
                 break;
             case G_CULL_BOTH:
+                EXPCOUNT(2, 1);
                 return;
         }
     }

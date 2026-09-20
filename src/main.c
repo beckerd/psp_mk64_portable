@@ -1530,6 +1530,14 @@ static void port_split_stats(void) {
             if (++sExpTotal == 1260) { /* every 21 s of pictures: three turns of the seven modes */
                 static const char* names[] = { "everything", "no triangles (vertices only)", "no vertices, no triangles", "display list not run", "triangles culled and clipped but not drawn", "no texture imports (and so no texture changes)", "everything, batches through the staging copy" };
                 s32 m;
+                {
+                    extern u32 gPortExpCount[10];
+                    u32 p = sExpTotal / 7, *c = gPortExpCount; /* counted in mode 0 only: a seventh of the report's pictures */
+                    PORT_LOG("exp counts per normal picture: tris in %u, rejected %u, culled %u, clipper %u, emitted %u | rebuilds %u, imports %u, uploads %u, flushes %u | vertices %u\n",
+                             (unsigned) (c[0] / p), (unsigned) (c[1] / p), (unsigned) (c[2] / p), (unsigned) (c[3] / p), (unsigned) (c[4] / p),
+                             (unsigned) (c[5] / p), (unsigned) (c[6] / p), (unsigned) (c[7] / p), (unsigned) (c[8] / p), (unsigned) (c[9] / p));
+                    for (m = 0; m < 10; m++) c[m] = 0;
+                }
                 for (m = 0; m < 7; m++) {
                     PORT_LOG("exp %d (%s): busy %u us avg per picture over %u pictures, %u late\n", (int) m, names[m],
                              (unsigned) (sExpN[m] ? sExpSum[m] / sExpN[m] : 0), (unsigned) sExpN[m], (unsigned) sExpLate[m]);
