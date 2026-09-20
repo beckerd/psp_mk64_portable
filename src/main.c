@@ -1513,6 +1513,13 @@ static void port_split_stats(void) {
             if (of != NULL) fclose(of);
             if (gPortOldClip) PORT_LOG("gfx: data/oldclip: the clipper runs all seven planes\n");
             {
+                extern s32 gPortCourseStatic;
+                FILE* cf = fopen(port_save_path("coursestatic"), "rb");
+                gPortCourseStatic = cf != NULL;
+                if (cf != NULL) fclose(cf);
+                if (gPortCourseStatic) PORT_LOG("gfx: data/coursestatic: course textures are not re-hashed\n");
+            }
+            {
                 extern s32 gPortVfpuOutcodes;
                 FILE* vf = fopen(port_save_path("vfpuoc"), "rb");
                 gPortVfpuOutcodes = vf != NULL;

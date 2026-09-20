@@ -153,6 +153,7 @@ struct TextureHashmapNode {
     uint8_t cms, cmt;
     bool linear_filter;
     uint8_t mirror; // texels imported doubled with the mirrored copy: bit 0 along S, bit 1 along T
+    uint16_t tex_w, tex_h; // the tile's size when imported: part of the key (a static texture's content hash is a constant)
 } __attribute__((packed, aligned(4)));
 static struct {
     struct TextureHashmapNode *hashmap[1024];
@@ -903,6 +904,7 @@ extern char __assets_start[], __assets_end[]; // linker: the ROM-derived asset r
  * region (ROM blobs, torch assets), which the linker places AFTER .bss. */
 /* port.h: the course texture block and, inside it, the stadium-screen tiles. */
 static const char *course_tex_lo, *course_tex_hi, *fb_tile_lo, *fb_tile_hi;
+s32 gPortCourseStatic; /* data/coursestatic (main.c) */
 static int tex_cache_flush_pending;
 void port_course_textures_loaded(void *start, u32 size) {
     course_tex_lo = (const char *) start;
@@ -917,7 +919,11 @@ void port_fb_tile_note(void *target, u32 bytes) {
 }
 static inline bool gfx_is_static_memory(const void *p) {
     const char *c = (const char *) p;
-    if (c >= course_tex_lo && c < course_tex_hi) {
+    /* Off unless data/coursestatic: on hardware this saved nothing measurable,
+     * and after a full race the results screen's replays drew with garbage
+     * texels (not reproducible in PPSSPP) -- the one recent change that alters
+     * what the texture cache hands back. */
+    if (gPortCourseStatic && c >= course_tex_lo && c < course_tex_hi) {
         return !(c >= fb_tile_lo && c < fb_tile_hi);
     }
     return (c >= _ftext && c < _fbss) || (c >= __assets_start && c < __assets_end);
@@ -1044,13 +1050,16 @@ static uint32_t gfx_texture_upload_bytes(int tile, uint32_t fmt, uint32_t siz, u
 
 static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, const uint8_t *orig_addr, uint32_t fmt, uint32_t siz, uint8_t mirror) {
     size_t hash = (uintptr_t)orig_addr;
+    uint32_t key_w, key_h;
+    gfx_tile_size(tile, &key_w, &key_h);
     uint32_t content_hash = gfx_texture_content_hash(tile, fmt, siz);
     uint32_t upload_bytes = gfx_texture_upload_bytes(tile, fmt, siz, mirror);
     struct TextureHashmapNode *stale = NULL;
     hash = (hash >> 5) & 0x3ff;
     struct TextureHashmapNode **node = &gfx_texture_cache.hashmap[hash];
     while (*node != NULL && *node - gfx_texture_cache.pool < (int)gfx_texture_cache.pool_pos) {
-        if ((*node)->texture_addr == orig_addr && (*node)->fmt == fmt && (*node)->siz == siz && (*node)->mirror == mirror) {
+        if ((*node)->texture_addr == orig_addr && (*node)->fmt == fmt && (*node)->siz == siz && (*node)->mirror == mirror &&
+            (*node)->tex_w == (uint16_t) key_w && (*node)->tex_h == (uint16_t) key_h) {
             if ((*node)->content_hash == content_hash) {
                 gfx_rapi->select_texture(tile, (*node)->texture_id);
                 gfx_rapi->set_sampler_parameters(0, (*node)->linear_filter, (*node)->cms, (*node)->cmt);
@@ -1101,6 +1110,8 @@ static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, co
     (*node)->fmt = fmt;
     (*node)->siz = siz;
     (*node)->mirror = mirror;
+    (*node)->tex_w = (uint16_t) key_w;
+    (*node)->tex_h = (uint16_t) key_h;
     (*node)->content_hash = content_hash;
     (*node)->last_used_frame = gfx_frame_counter;
     *n = *node;

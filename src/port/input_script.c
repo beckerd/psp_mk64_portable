@@ -173,6 +173,10 @@ void port_input_script(OSContPad* pad) {
             break;
         }
     }
+#ifdef PORT_FINISH_TEST
+    if (sFrame >= 1100 && sFrame < 1700) { pad->button = A_BUTTON; pad->stick_x = 0; pad->stick_y = 0; } /* straight over the line */
+    else if (sFrame >= 1700) { pad->button = 0; pad->stick_x = 0; pad->stick_y = 0; }                  /* then hands off: no pause, no menu presses */
+#endif
 #ifdef PORT_NET
     /* Both machines run this script and both navigate their own menus to the
      * same race before the lobby; the lobby waits without input (netrole.bin
@@ -357,6 +361,21 @@ void port_input_script(OSContPad* pad) {
     }
 #endif
     if (sFrame == 482) { extern int gPortTraceArm; gPortTraceArm = 4; }
+#ifdef PORT_FINISH_TEST
+    /* Any course: two laps already counted as the race starts, so the first
+     * crossing of the line (the karts start just behind it, and the pad is held
+     * straight above) ends the race and the
+     * results screen follows.  Screenshots every 30 frames from there. */
+    {
+        static int sLapsSet;
+        if (!sLapsSet && gGamestate == RACING && gPlayerOne != NULL && gPlayerOne->speed > 1.0f) { /* rolling: the race is on */
+            sLapsSet = 1;
+            gLapCountByPlayerId[0] = 2;
+            PORT_LOG("script f%u: finish test, laps set to 2\n", sFrame);
+        }
+    }
+    if (sFrame > 1300 && sFrame <= 3200 && (sFrame % 30) == 0 && (sFrame % SHOT_EVERY) != 0) port_screenshot((int) sFrame);
+#endif
     if (sFrame == 481) {
         // One fully traced frame of the game-select screen (issue #5: the
         // GAME SELECT banner and the OPTION/DATA buttons do not draw).
