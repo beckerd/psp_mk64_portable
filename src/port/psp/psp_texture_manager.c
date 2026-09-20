@@ -127,7 +127,13 @@ void texman_reset(void *buf, unsigned int size) {
 #endif
 }
 
+/* Counts arena resets: a texture id from before a reset means nothing after it
+ * (the FPS overlay keeps one across frames). */
+static unsigned int texman_gen;
+unsigned int texman_generation(void) { return texman_gen; }
+
 void texman_clear(void) {
+    texman_gen++;
     memset(textures, 0, sizeof(textures));
     psp_tex_number = 0;
     psp_tex_bound = (unsigned int) -1; // nothing valid is bound any more

@@ -152,10 +152,23 @@ void port_gfx_overlay(void) {
     r->set_use_alpha(true);
     r->set_viewport(0, 0, 480, 272);
     r->set_scissor(0, 0, 480, 272);
-    // The texture arena is recycled behind our back: upload the 1 KB font every frame.
-    sFontTexId = r->new_texture();
-    r->select_texture(0, sFontTexId);
-    r->upload_texture((const u8*) sFontTex, 64, 8, 1 /* GU_PSM_5551 */);
+    // One font texture, made again only after the arena was reset behind our
+    // back.  It used to be a NEW texture every frame: at 60 pictures a second
+    // that alone used up the arena's 512 slots every ~7 s, and each reset made
+    // the race re-upload every texture in view (seen on hardware as an arena
+    // reset every 6 s whenever the counter was on).
+    {
+        extern unsigned int texman_generation(void);
+        static unsigned int sFontGen = (unsigned int) -1;
+        if (sFontGen != texman_generation()) {
+            sFontGen = texman_generation();
+            sFontTexId = r->new_texture();
+            r->select_texture(0, sFontTexId);
+            r->upload_texture((const u8*) sFontTex, 64, 8, 1 /* GU_PSM_5551 */);
+        } else {
+            r->select_texture(0, sFontTexId);
+        }
+    }
     r->set_sampler_parameters(0, false, 2 /* G_TX_CLAMP */, 2);
     r->set_depth_mask(false);
     r->set_zmode_decal(false);
@@ -319,6 +332,14 @@ int main(UNUSED int argc, char** argv) {
 #ifdef PORT_ME_AUDIO
     { extern void port_me_load(void); port_me_load(); } /* mk64k.prx boots the Media Engine */
 #endif
+    { /* a data/showfps file starts with the FPS counter on (hold SELECT 3 s toggles it as always) */
+        extern int gPortShowFps;
+        FILE* sf = fopen(port_save_path("showfps"), "rb");
+        if (sf != NULL) {
+            fclose(sf);
+            gPortShowFps = 1;
+        }
+    }
     { /* test knob: a data/cpu222 file runs the CPU at 222 MHz (the PSP-1000's WLAN is unhappy at 333) */
         FILE* f = fopen(port_save_path("cpu222"), "rb");
         if (f != NULL) {
