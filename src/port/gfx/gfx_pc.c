@@ -106,7 +106,21 @@ struct LoadedVertex {
     float u, v;
     struct RGBA color;
     uint32_t clip_rej;
+    /* Per-vertex triangle tests (perspective GE_TL vertices with clip.w > 0;
+     * oc is 0 otherwise): the projected position for the winding test, and
+     * outcode bits a triangle ANDs / ORs instead of redoing the compares for
+     * each of the three to six triangles that share the vertex. */
+    float sx, sy;   /* clip.x / clip.w, clip.y / clip.w */
+    uint32_t oc;    /* VOC_* */
+    uint32_t oc_pad;
 } __attribute__((packed, aligned(16)));
+#define VOC_RIGHT 0x001   /* beyond a screen edge */
+#define VOC_LEFT 0x002
+#define VOC_TOP 0x004
+#define VOC_BOTTOM 0x008
+#define VOC_GUARD 0x010   /* beyond the GE guard band: the triangle needs the CPU clipper */
+#define VOC_FAR 0x100     /* beyond the draw distance */
+#define VOC_REJECT (VOC_RIGHT | VOC_LEFT | VOC_TOP | VOC_BOTTOM | VOC_FAR) /* all three share one: invisible */
 
 typedef struct VertexColor {
 	unsigned short u, v;
@@ -1466,6 +1480,10 @@ struct ShaderProgram {
     int num_inputs;
 };
 
+#ifndef GE_GUARD_NDC
+#define GE_GUARD_NDC 3.0f /* see gfx_ge_tl_near_clip */
+#endif
+extern float gPortDrawDist;
 /* VFPU lighting (max_fps_experiments).  Refreshed when the lights change: the
  * light directions with the per-vertex /127 folded in, the light colours, the
  * ambient colour and the two texgen look-at axes, as aligned quads the vertex
@@ -1659,6 +1677,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
         // cheaply (one dot product, not a full transform) and flag verts at or
         // behind the near plane so tri1 can drop those triangles.
         d->clip_rej = 0;
+        d->oc = 0;
         if (rsp.is_persp) {
             // MK64 folds the camera into the projection: clip = MP * obj, and the
             // modelview is identity for the static course.  One VFPU vtfm4 (c700
@@ -1695,6 +1714,21 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                 if (proj_vec[3] < GE_TL_NEAR || proj_vec[2] + wz < 0.0f) d->clip_rej = Z_POS;
                 // Beyond the far plane (z_ndc > 1): the GE would drop the whole triangle.
                 if (wz - proj_vec[2] < 0.0f) d->clip_rej |= Z_NEG;
+            }
+            {
+                uint32_t oc = proj_vec[3] > gPortDrawDist ? VOC_FAR : 0;
+                if (d->clip_rej == 0) { /* clip.w >= GE_TL_NEAR > 0 */
+                    float px = proj_vec[0], py = proj_vec[1], pw = proj_vec[3];
+                    float gw = GE_GUARD_NDC * pw, iw = 1.0f / pw;
+                    if (px > pw) oc |= VOC_RIGHT;
+                    if (px < -pw) oc |= VOC_LEFT;
+                    if (py > pw) oc |= VOC_TOP;
+                    if (py < -pw) oc |= VOC_BOTTOM;
+                    if (px > gw || px < -gw || py > gw || py < -gw) oc |= VOC_GUARD;
+                    d->sx = px * iw;
+                    d->sy = py * iw;
+                }
+                d->oc = oc;
             }
         } else if (gfx_hud_anchor) {
             /* Ortho HUD element: clip.x (w == 1) tells which screen edge it belongs to. */
@@ -2089,9 +2123,12 @@ static inline void gfx_emit_vertex(const struct LoadedVertex *cv, uint32_t cc_id
         // Folded into the vertex colour before the texture multiply: exact
         // for dark fog colours, slightly darker than the N64 for bright ones.
         int a = cv->color.a, ia = 255 - a;
-        out->color.r = (uint8_t) ((out->color.r * ia + rdp.fog_color.r * a) / 255);
-        out->color.g = (uint8_t) ((out->color.g * ia + rdp.fog_color.g * a) / 255);
-        out->color.b = (uint8_t) ((out->color.b * ia + rdp.fog_color.b * a) / 255);
+#define DIV255(v) ((((v) + 1) + ((v) >> 8)) >> 8) /* exact for 0..65025, no divide */
+        { int r_ = out->color.r * ia + rdp.fog_color.r * a, g_ = out->color.g * ia + rdp.fog_color.g * a, b_ = out->color.b * ia + rdp.fog_color.b * a;
+          out->color.r = (uint8_t) DIV255(r_);
+          out->color.g = (uint8_t) DIV255(g_);
+          out->color.b = (uint8_t) DIV255(b_); }
+#undef DIV255
     }
     buf_num_vert++;
     buf_vbo_len += sizeof(psp_fast_t);
@@ -2234,6 +2271,7 @@ static inline void nclip_lerp(struct LoadedVertex *o, const struct LoadedVertex 
     o->color.b = (uint8_t) (a->color.b + t * (b->color.b - a->color.b));
     o->color.a = (uint8_t) (a->color.a + t * (b->color.a - a->color.a));
     o->clip_rej = 0;
+    o->oc = 0;
 }
 
 /* Clip convex polygon `in` (n verts) against the half-space
@@ -2335,12 +2373,13 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
         // The whole triangle lies outside the visible area
         return;
     }
-#if defined(PORT_GE_TL) && defined(PORT_DRAW_DIST)
-    // Draw-distance cull: skip triangles entirely beyond this view depth
-    // (clip.w grows with distance).  Cuts the far scenery the wide intro camera
-    // would otherwise draw -> big win on heavy intros; also drops the distant
-    // sky-streaks.  v->_w holds clip.w.
-    if (v1->_w > gPortDrawDist && v2->_w > gPortDrawDist && v3->_w > gPortDrawDist) {
+#if defined(PORT_GE_TL)
+    // All three beyond the same screen edge, or beyond the draw distance (clip.w
+    // grows with distance; cuts the far scenery and the distant sky-streaks):
+    // one AND of the per-vertex outcodes (gfx_sp_vertex).  Measured on
+    // hardware, the per-triangle compares this replaces were the largest
+    // renderer cost -- 4-5 ms a picture on DK's Jungle Parkway.
+    if (v1->oc & v2->oc & v3->oc & VOC_REJECT) {
         return;
     }
 #endif
@@ -2454,25 +2493,8 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     // A vertex whose |clip.x| or |clip.y| exceeds GE_GUARD_NDC*clip.w projects
     // outside the GE guard band and WRAPS on real hardware -- route the whole
     // triangle through the guard-band clipper.  Perspective only.
-    if (!ge_needs_clip && (rsp.is_persp)) {
-        const struct LoadedVertex *gv[3] = { v1, v2, v3 };
-        int gk, off_screen = 0xF;
-        for (gk = 0; gk < 3; gk++) {
-            float sw = gv[gk]->_w; // > 0 here: no vertex is flagged at/behind the near plane
-            float gw = GE_GUARD_NDC * sw;
-            int out = 0;
-            if (gv[gk]->_x > sw) out |= 1;
-            if (gv[gk]->_x < -sw) out |= 2;
-            if (gv[gk]->_y > sw) out |= 4;
-            if (gv[gk]->_y < -sw) out |= 8;
-            off_screen &= out;
-            if (gv[gk]->_x > gw || gv[gk]->_x < -gw || gv[gk]->_y > gw || gv[gk]->_y < -gw) {
-                ge_needs_clip = true;
-            }
-        }
-        if (off_screen != 0) {
-            return; // all three beyond the same screen edge: nothing of it is visible
-        }
+    if ((v1->oc | v2->oc | v3->oc) & VOC_GUARD) {
+        ge_needs_clip = true;
     }
 
 #endif
@@ -2491,10 +2513,17 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
         // w > 0, so the sign of the homogeneous cross product is exact.  The
         // differences of x/w share the positive denominator w1*w2*w2*w3.
         const struct LoadedVertex *c1 = clipped_vertices[0], *c2 = clipped_vertices[1], *c3 = clipped_vertices[2];
-        float w1 = c1->_w, w3 = c3->_w;
-        float cross = gfx_winding_cross(c1, c2, c3);
-        if (w1 * w3 < 0.0f) {
-            cross = -cross;
+        float cross;
+        if (clipped_vertices == v_arr && rsp.is_persp && (c1->clip_rej | c2->clip_rej | c3->clip_rej) == 0) {
+            /* All three in front of the eye: the projected positions kept by
+             * gfx_sp_vertex give the same sign with two multiplies. */
+            cross = (c1->sx - c2->sx) * (c3->sy - c2->sy) - (c1->sy - c2->sy) * (c3->sx - c2->sx);
+        } else {
+            float w1 = c1->_w, w3 = c3->_w;
+            cross = gfx_winding_cross(c1, c2, c3);
+            if (w1 * w3 < 0.0f) {
+                cross = -cross;
+            }
         }
         switch (rsp.geometry_mode & G_CULL_BOTH) {
             case G_CULL_FRONT:
