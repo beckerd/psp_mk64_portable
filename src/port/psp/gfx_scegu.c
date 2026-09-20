@@ -688,13 +688,36 @@ static void gfx_scegu_set_zmode_decal(bool zmode_decal) {
     gfx_scegu_update_depth_offset();
 }
 
+/* The GE scissor is the game's scissor cut down to the viewport.  Triangles
+ * reach the GE unclipped up to the guard band (gfx_pc.c GE_GUARD_NDC, 3x the
+ * viewport), so the scissor alone keeps a split-screen view inside its
+ * quadrant: on the results screen the game's scissor spans more than the
+ * replay's viewport, and the replay drew across the score panel beside it.
+ * (Each setter used to overwrite the other's rectangle.) */
+static int vp_rect[4] = { 0, 0, SCR_WIDTH, SCR_HEIGHT }, sc_rect[4] = { 0, 0, SCR_WIDTH, SCR_HEIGHT }; /* x0 y0 x1 y1, GE coordinates */
+static void gfx_scegu_apply_scissor(void) {
+    int x0 = vp_rect[0] > sc_rect[0] ? vp_rect[0] : sc_rect[0];
+    int y0 = vp_rect[1] > sc_rect[1] ? vp_rect[1] : sc_rect[1];
+    int x1 = vp_rect[2] < sc_rect[2] ? vp_rect[2] : sc_rect[2];
+    int y1 = vp_rect[3] < sc_rect[3] ? vp_rect[3] : sc_rect[3];
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > SCR_WIDTH) x1 = SCR_WIDTH;
+    if (y1 > SCR_HEIGHT) y1 = SCR_HEIGHT;
+    if (x1 < x0) x1 = x0;
+    if (y1 < y0) y1 = y0;
+    sceGuScissor(x0, y0, x1, y1);
+}
+
 static void gfx_scegu_set_viewport(int x, int y, int width, int height) {
     sceGuViewport(2048 - (SCR_WIDTH / 2) + x + (width / 2), 2048 + (SCR_HEIGHT / 2) - y - (height / 2), width, height);
-    sceGuScissor(x, SCR_HEIGHT - y - height, x + width, SCR_HEIGHT - y);
+    vp_rect[0] = x; vp_rect[1] = SCR_HEIGHT - y - height; vp_rect[2] = x + width; vp_rect[3] = SCR_HEIGHT - y;
+    gfx_scegu_apply_scissor();
 }
 
 static void gfx_scegu_set_scissor(int x, int y, int width, int height) {
-    sceGuScissor(x, SCR_HEIGHT - y - height, x + width, SCR_HEIGHT - y);
+    sc_rect[0] = x; sc_rect[1] = SCR_HEIGHT - y - height; sc_rect[2] = x + width; sc_rect[3] = SCR_HEIGHT - y;
+    gfx_scegu_apply_scissor();
 }
 
 static void gfx_scegu_set_use_alpha(bool use_alpha) {
@@ -954,7 +977,8 @@ static void gfx_scegu_capture_screens(void) {
     sceGuDrawBufferList(GU_PSM_5650, cur_draw_fb, BUF_WIDTH);
     sceGuOffset(2048 - (SCR_WIDTH / 2), 2048 - (SCR_HEIGHT / 2));
     sceGuViewport(2048 - (SCR_WIDTH / 2), 2048 - (SCR_HEIGHT / 2), SCR_WIDTH, SCR_HEIGHT);
-    sceGuScissor(0, 0, SCR_WIDTH, SCR_HEIGHT);
+    vp_rect[0] = sc_rect[0] = 0; vp_rect[1] = sc_rect[1] = 0; vp_rect[2] = sc_rect[2] = SCR_WIDTH; vp_rect[3] = sc_rect[3] = SCR_HEIGHT;
+    sceGuScissor(0, 0, SCR_WIDTH, SCR_HEIGHT); /* the rectangles above say so too; the interpreter re-sends its own */
     gfx_scegu_set_use_alpha(true);
     gfx_scegu_set_depth_test(false);
     gfx_scegu_set_depth_mask(false);
