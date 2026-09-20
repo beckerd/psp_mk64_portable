@@ -878,8 +878,25 @@ extern char __assets_start[], __assets_end[]; // linker: the ROM-derived asset r
 
 /* Texels the game never rewrites: code/data of the executable, or the asset
  * region (ROM blobs, torch assets), which the linker places AFTER .bss. */
+/* port.h: the course texture block and, inside it, the stadium-screen tiles. */
+static const char *course_tex_lo, *course_tex_hi, *fb_tile_lo, *fb_tile_hi;
+static int tex_cache_flush_pending;
+void port_course_textures_loaded(void *start, u32 size) {
+    course_tex_lo = (const char *) start;
+    course_tex_hi = course_tex_lo + size;
+    fb_tile_lo = fb_tile_hi = NULL;
+    tex_cache_flush_pending = 1; /* the same addresses are about to mean other texels */
+}
+void port_fb_tile_note(void *target, u32 bytes) {
+    const char *t = (const char *) target;
+    if (fb_tile_lo == NULL || t < fb_tile_lo) fb_tile_lo = t;
+    if (fb_tile_hi == NULL || t + bytes > fb_tile_hi) fb_tile_hi = t + bytes;
+}
 static inline bool gfx_is_static_memory(const void *p) {
     const char *c = (const char *) p;
+    if (c >= course_tex_lo && c < course_tex_hi) {
+        return !(c >= fb_tile_lo && c < fb_tile_hi);
+    }
     return (c >= _ftext && c < _fbss) || (c >= __assets_start && c < __assets_end);
 }
 
@@ -3793,7 +3810,10 @@ void gfx_start_frame(void) {
     gfx_flush_index = 0;
     // Recycle the texture arena between frames (the previous frame's display
     // list has fully executed) rather than in the middle of one.
-    if (texman_usage_percent() > 85) {
+    if (tex_cache_flush_pending) {
+        tex_cache_flush_pending = 0;
+        gfx_texture_cache_reset(false); /* the course texture block changed hands (port_course_textures_loaded) */
+    } else if (texman_usage_percent() > 85) {
         port_log("gfx: frame %u arena reset at %u%% (%u mid-frame resets last frame)\n", (unsigned) gfx_frame_counter, (unsigned) texman_usage_percent(), (unsigned) gfx_midframe_resets);
         gfx_texture_cache_reset(false);
     }

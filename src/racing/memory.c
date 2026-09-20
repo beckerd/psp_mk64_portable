@@ -1365,6 +1365,9 @@ void decompress_textures(u32* arg0) {
     gHeapEndPtr = sp20;
     temp_t2 = gHeapEndPtr;
     set_segment_base_addr(0x5, (void*) temp_t2);
+#ifdef TARGET_PSP
+    port_course_textures_loaded((void*) temp_t2, (u32) phi_v0);
+#endif
 }
 
 void* decompress_segments(u8* start, u8* end) {

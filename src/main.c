@@ -1583,6 +1583,7 @@ void port_game_loop_one_iteration(void) {
     if (gGamestateNext != gGamestate) {
         PORT_TRACE("gamestate %d -> %d\n", gGamestate, gGamestateNext);
         gGamestate = gGamestateNext;
+        port_course_textures_loaded(NULL, 0); /* the heap is about to be reused; a course load sets the block again */
         update_gamestate();
         PORT_TRACE(" update_gamestate done\n");
     }

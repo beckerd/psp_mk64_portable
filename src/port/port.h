@@ -84,6 +84,13 @@ void port_log(const char* fmt, ...);
  * at the end of the frame.  x/y/w/h are in the N64's 320x240 frame; `target`
  * is the tile in the course texture segment, written in N64 texel order. */
 void port_fb_copy_request(s32 x, s32 y, s32 w, s32 h, u16* target);
+/* The course's texture block (memory.c: decompressed once at the end of the
+ * heap, segment 5) does not change while the course is up, so the renderer
+ * need not hash those texels on every material change -- 4 ms a picture on
+ * hardware.  NULL/0 when the block is gone (any gamestate change).  The
+ * stadium-screen tiles inside it are rewritten every frame and stay hashed. */
+void port_course_textures_loaded(void* start, u32 size);
+void port_fb_tile_note(void* target, u32 bytes);
 
 /* 60 fps experiment (branch max_fps_experiments).  MK64 simulates two ticks per
  * displayed frame in 1P.  A "split frame" shows one picture per tick instead:

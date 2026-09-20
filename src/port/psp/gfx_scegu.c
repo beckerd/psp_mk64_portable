@@ -883,6 +883,7 @@ void port_fb_copy_request(int x, int y, int w, int h, uint16_t *target) {
         cap_count++;
     }
     cap_req[i].x = x; cap_req[i].y = y; cap_req[i].w = w; cap_req[i].h = h; cap_req[i].target = target;
+    { extern void port_fb_tile_note(void *target, unsigned int bytes); port_fb_tile_note(target, (unsigned int) (w * h * 2)); } /* rewritten every frame: keeps its content hash */
 }
 
 /* N64 320x240 frame coordinates -> PSP frame pixels.  The 3D view keeps the
