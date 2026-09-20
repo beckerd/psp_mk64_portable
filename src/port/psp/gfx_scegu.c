@@ -695,6 +695,8 @@ static void gfx_scegu_set_zmode_decal(bool zmode_decal) {
  * replay's viewport, and the replay drew across the score panel beside it.
  * (Each setter used to overwrite the other's rectangle.) */
 static int vp_rect[4] = { 0, 0, SCR_WIDTH, SCR_HEIGHT }, sc_rect[4] = { 0, 0, SCR_WIDTH, SCR_HEIGHT }; /* x0 y0 x1 y1, GE coordinates */
+static int sc_empty; /* the scissor and the viewport do not overlap: draw nothing */
+static unsigned int sc_empty_skips, sc_empty_sets; /* logged with the display-list line: does this case really happen? */
 static void gfx_scegu_apply_scissor(void) {
     int x0 = vp_rect[0] > sc_rect[0] ? vp_rect[0] : sc_rect[0];
     int y0 = vp_rect[1] > sc_rect[1] ? vp_rect[1] : sc_rect[1];
@@ -704,8 +706,18 @@ static void gfx_scegu_apply_scissor(void) {
     if (y0 < 0) y0 = 0;
     if (x1 > SCR_WIDTH) x1 = SCR_WIDTH;
     if (y1 > SCR_HEIGHT) y1 = SCR_HEIGHT;
-    if (x1 < x0) x1 = x0;
-    if (y1 < y0) y1 = y0;
+    /* An empty overlap (on the results screen the game's scissor and a view's
+     * viewport can be different quadrants) must never reach the GE as an
+     * inverted rectangle: pspgu sends end = value - 1, i.e. end < start, which
+     * PPSSPP clamps and real hardware is not known to -- a scissor taken as
+     * huge lets pixels past the framebuffer, into the VRAM the textures live
+     * in.  Nothing can be visible: the draws are skipped instead. */
+    if (x1 <= x0 || y1 <= y0) {
+        sc_empty = 1;
+        sc_empty_sets++;
+        return;
+    }
+    sc_empty = 0;
     sceGuScissor(x0, y0, x1, y1);
 }
 
@@ -788,6 +800,11 @@ static void gfx_scegu_draw_triangles(float buf_vbo[], UNUSED size_t buf_vbo_len,
         port_log("  tris %d: v0 (%.2f,%.2f,%.2f) uv (%.2f,%.2f) col %08X tex %d [blend %d alphatest %d texfunc %d depth %d]\n", (int) buf_vbo_num_tris, v[0].x, v[0].y, v[0].z, v[0].u, v[0].v, v[0].color, (cur_shader && cur_shader->texture_used[0]) ? (int) psp_tex_bound : -1,
                  gl_blend, dbg_alphatest, dbg_texfunc, dbg_depth_test);
     }
+    if (sc_empty) { /* see gfx_scegu_apply_scissor: nothing of this batch can be visible */
+        sc_empty_skips++;
+        batch_ptr = NULL; /* a directly emitted batch is simply left behind, past the list's write position */
+        return;
+    }
     if (!is_shader_enabled(cur_shader->shader_id)) {
         gfx_scegu_apply_shader(get_shader_from_id(get_shader_remap(cur_shader->shader_id)));
     }
@@ -849,6 +866,9 @@ static void gfx_scegu_draw_triangles(float buf_vbo[], UNUSED size_t buf_vbo_len,
 }
 
 void gfx_scegu_draw_triangles_2d(float buf_vbo[], UNUSED size_t buf_vbo_len, UNUSED size_t buf_vbo_num_tris) {
+    if (sc_empty) {
+        return;
+    }
     if (!is_shader_enabled(cur_shader->shader_id)) {
         gfx_scegu_apply_shader(get_shader_from_id(get_shader_remap(cur_shader->shader_id)));
     }
@@ -1121,6 +1141,10 @@ static void gfx_scegu_end_frame(void) {
     }
     if ((++frames % 300) == 0 || used > GU_LIST_BYTES - 65536) {
         port_log("gfx: display list %u bytes (max %u of %u)\n", used, max_used, (unsigned) GU_LIST_BYTES);
+        if (sc_empty_sets != 0) {
+            port_log("gfx: empty scissor/viewport overlap set %u times, %u batches skipped under it\n", sc_empty_sets, sc_empty_skips);
+            sc_empty_sets = sc_empty_skips = 0;
+        }
     }
     sceGuSync(0, 0);
     gfx_scegu_capture_screens(); // stadium TV tiles from the finished frame (before the vblank wait absorbs it)
