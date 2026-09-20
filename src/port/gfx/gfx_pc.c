@@ -1817,12 +1817,15 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
                 {
                     float wz2 = (1.0f - GE_DEPTH_EPS) * proj_vec[3];
                     uint32_t oc = (cc_edge & 0xF) | (cc_guard & 0xF) << 4;
-                    if (proj_vec[3] < GE_TL_NEAR || proj_vec[2] + wz2 < 0.0f || wz2 - proj_vec[2] < 0.0f) {
-                        /* Screen-edge rejects only for vertices inside the depth
-                         * range, as on every build that showed a clean picture on
-                         * hardware.  (In theory the test holds for any w.) */
-                        oc &= ~0xFu;
+                    if (gPortOldClip && (proj_vec[3] < GE_TL_NEAR || proj_vec[2] + wz2 < 0.0f || wz2 - proj_vec[2] < 0.0f)) {
+                        oc &= ~0xFu; /* data/oldclip: screen-edge rejects only for vertices inside the depth range */
                     }
+                    /* Otherwise the edge bits count for any vertex: a half-space
+                     * test in clip space holds for any w, and the decision is
+                     * made on the CPU from the same numbers on the PSP and in
+                     * PPSSPP -- which shows no missing ground -- so it cannot be
+                     * the hardware-only fault.  It keeps the near-camera
+                     * triangles beside the kart out of the clipper. */
                     if (proj_vec[3] > gPortDrawDist) oc |= VOC_FAR;
                     if (proj_vec[3] < GE_TL_NEAR) oc |= VOC_NEARW;
                     if (proj_vec[2] + wz2 < 0.0f) oc |= VOC_ZNEAR;
@@ -2384,14 +2387,25 @@ static inline void nclip_lerp(struct LoadedVertex *o, const struct LoadedVertex 
 
 /* Clip convex polygon `in` (n verts) against the half-space
  * ax*clip.x + ay*clip.y + az*clip.z + aw*clip.w >= 0.  Writes up to n+1 verts to `out`. */
+#define NCLIP_UNCHANGED (-1) /* every vertex is inside: `in` is the result, nothing was copied */
 static int nclip_plane(const struct LoadedVertex *in, int n, struct LoadedVertex *out,
                        float ax, float ay, float az, float aw, int cap) {
-    int nout = 0, i;
+    int nout = 0, i, all_in = 1;
+    float dist[12];
+    /* One distance per vertex (it used to be computed twice), and a polygon
+     * wholly inside the plane costs no more than that: no 64-byte copies. */
+    for (i = 0; i < n; i++) {
+        dist[i] = ax * in[i]._x + ay * in[i]._y + az * in[i]._z + aw * in[i]._w;
+        if (!(dist[i] >= 0.0f)) all_in = 0;
+    }
+    if (all_in) {
+        return NCLIP_UNCHANGED;
+    }
     for (i = 0; i < n; i++) {
         const struct LoadedVertex *cur = &in[i];
         const struct LoadedVertex *nxt = &in[(i + 1) % n];
-        float dc = ax * cur->_x + ay * cur->_y + az * cur->_z + aw * cur->_w;
-        float dn = ax * nxt->_x + ay * nxt->_y + az * nxt->_z + aw * nxt->_w;
+        float dc = dist[i];
+        float dn = dist[(i + 1) % n];
         int cin = dc >= 0.0f, nin = dn >= 0.0f;
         if (cin && nout < cap) out[nout++] = *cur;
         if (cin != nin && nout < cap) {
@@ -2461,7 +2475,9 @@ static void gfx_ge_tl_near_clip(const struct LoadedVertex *a, const struct Loade
         int k;
         for (k = 0; k < 6; k++) {
             if (m & planes[k].bit) {
-                n = nclip_plane(in, n, out, planes[k].ax, planes[k].ay, planes[k].az, planes[k].guard ? G : D, 10);
+                int r = nclip_plane(in, n, out, planes[k].ax, planes[k].ay, planes[k].az, planes[k].guard ? G : D, 10);
+                if (r == NCLIP_UNCHANGED) continue;
+                n = r;
                 if (n < 3) return;
                 swap = in; in = out; out = swap;
             }
@@ -3796,6 +3812,49 @@ static void gfx_vfpu_selftest(void) {
 }
 #endif
 
+/* Runs on every boot, PSP included: are the VFPU compare flags (data/vfpuoc)
+ * the same as the C compares?  PPSSPP says yes; only the PSP's own log can say
+ * so for the hardware.  Also checks vrcp against the divide. */
+static void gfx_vfpu_outcode_selftest(void) {
+    static const float tv[][4] = {
+        { 1.0f, 2.0f, 0.5f, 3.0f }, { 5.0f, -1.0f, 0.0f, 3.0f }, { -5.0f, 1.0f, 0.0f, 3.0f }, { 1.0f, 9.5f, 0.0f, 3.0f },
+        { 1.0f, -9.5f, 0.0f, 3.0f }, { 10.0f, 10.0f, 0.0f, 3.0f }, { -10.0f, -10.0f, 0.0f, 3.0f }, { 2.9f, -2.9f, 0.0f, 3.0f },
+        { 3.1f, 0.0f, 0.0f, 3.0f }, { 0.0f, 0.0f, 0.0f, -2.0f }, { 1.0f, 1.0f, 0.0f, -2.0f }, { -7.0f, 3.0f, 0.0f, -2.0f },
+        { 100.0f, -250.0f, 5.0f, 80.0f }, { 241.0f, 0.0f, 5.0f, 80.0f }, { 0.01f, 0.01f, 0.0f, 0.05f }, { 900.0f, 4000.0f, 1.0f, 1200.0f },
+    };
+    unsigned int k, bad = 0;
+    float worst = 0.0f;
+    for (k = 0; k < sizeof(tv) / sizeof(tv[0]); k++) {
+        float v[4] __attribute__((aligned(16))) = { tv[k][0], tv[k][1], tv[k][2], tv[k][3] };
+        float rq[4] __attribute__((aligned(16)));
+        uint32_t e = 0, g = 0, ce = 0, cg = 0;
+        float px = v[0], py = v[1], pw = v[3], gw = GE_GUARD_NDC * pw;
+        __asm__ volatile (
+            "lv.q    c100, %3\n"           /* operands number outputs first: %0 e, %1 g, %2 rq, %3 v */
+            "vmov.p  c000, c100\n" "vneg.p  c002, c100\n"
+            "vone.q  c010\n" "vscl.q  c010, c010, s103\n"
+            "vcmp.q  GT, c000, c010\n" "mfvc    %0, $131\n"
+            "vfim.s  s020, 3.0\n" "vscl.q  c010, c010, s020\n"
+            "vcmp.q  GT, c000, c010\n" "mfvc    %1, $131\n"
+            "vrcp.s  s020, s103\n" "vscl.p  c030, c100, s020\n" "sv.q    c030, %2\n"
+            : "=r"(e), "=r"(g), "=m"(*rq) : "m"(*v)
+        );
+        if (px > pw) ce |= 1; if (py > pw) ce |= 2; if (-px > pw) ce |= 4; if (-py > pw) ce |= 8;
+        if (px > gw) cg |= 1; if (py > gw) cg |= 2; if (-px > gw) cg |= 4; if (-py > gw) cg |= 8;
+        if ((e & 0xF) != ce || (g & 0xF) != cg) {
+            bad++;
+            port_log("vfpu outcodes: MISMATCH for (%g %g %g): edge %X vs C %X, guard %X vs C %X\n", px, py, pw, (unsigned) (e & 0xF), (unsigned) ce, (unsigned) (g & 0xF), (unsigned) cg);
+        }
+        if (pw > 0.0f) {
+            float err = rq[0] - px / pw;
+            if (err < 0.0f) err = -err;
+            err /= (px / pw < 0.0f ? -(px / pw) : px / pw) + 1e-6f;
+            if (err > worst) worst = err;
+        }
+    }
+    port_log("vfpu outcodes selftest: %u of %u vertices differ from the C compares; vrcp worst relative error %g\n", bad, (unsigned) (sizeof(tv) / sizeof(tv[0])), worst);
+}
+
 void gfx_init(struct GfxWindowManagerAPI *wapi, struct GfxRenderingAPI *rapi, const char *game_name, bool start_in_fullscreen) {
     gfx_wapi = wapi;
     gfx_rapi = rapi;
@@ -3851,6 +3910,7 @@ void gfx_init(struct GfxWindowManagerAPI *wapi, struct GfxRenderingAPI *rapi, co
     memcpy(rsp.P_matrix, identity_matrix, sizeof(identity_matrix));
     memcpy(rsp.modelview_matrix_stack[0], identity_matrix, sizeof(identity_matrix));
 
+    gfx_vfpu_outcode_selftest();
     gfx_wapi->get_dimensions(&gfx_current_dimensions.width, &gfx_current_dimensions.height);
     if (gfx_current_dimensions.height == 0) {
         // Avoid division by zero
