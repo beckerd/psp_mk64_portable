@@ -2,8 +2,8 @@
 
 # MK64 Portable
 
-A native PSP port of Mario Kart 64 running at full speed -- 60 fps in
-single-player races -- built on the
+A native PSP port of Mario Kart 64 running at 60 FPS in
+single-player races and 30 FPS in Adhoc multiplayer -- built on the
 [n64decomp/mk64](https://github.com/n64decomp/mk64) decompilation. The game's
 C code runs directly on the PSP's MIPS CPU; the N64-specific layers (libultra,
 the RSP graphics microcode, the RSP audio microcode) are replaced by a port
@@ -13,7 +13,7 @@ layer that drives the PSP's Graphics Engine and audio hardware.
 (USA) ROM that you provide and builds the game data from it. This is an
 unofficial fan project, not affiliated with or endorsed by Nintendo.
 
-This was created using Claude Fable 5. If you do not want AI code on your PSP, this is
+This was created using Claude Fable 5.1. If you do not want AI code on your PSP, this is
 not a project for you.
 
 <p align="center"><img src="icon/MK64-PIC1.png" alt="" width="480"></p>
