@@ -108,7 +108,10 @@ void mix_job_execute(const MixJob* job, uint32_t m) {
 
 void port_mix_begin(int ai_buffer) {
     if (sUseMe < 0) {
-        FILE* f = fopen(port_save_path("nome"), "rb"); /* test knob: data/nome keeps the mixer on the main CPU */
+        FILE* f = NULL;
+#ifdef PORT_DEBUG_KNOBS
+        f = fopen(port_save_path("nome"), "rb"); /* test knob: data/nome keeps the mixer on the main CPU */
+#endif
         if (f != NULL) { fclose(f); sUseMe = 0; PORT_LOG("audio: mixer on the main CPU (data/nome)\n"); }
         else {
             sUseMe = port_me_start();

@@ -3899,8 +3899,11 @@ static void gfx_vfpu_outcode_selftest(void) {
     {
         /* The live path is the vsync variant: use it only where it just proved
          * itself, on this machine. */
-        FILE *nf = fopen(port_save_path("novfpuoc"), "rb");
+        FILE *nf = NULL;
+#ifdef PORT_DEBUG_KNOBS
+        nf = fopen(port_save_path("novfpuoc"), "rb");
         if (nf != NULL) fclose(nf);
+#endif
         gPortVfpuOutcodes = bad_sync == 0 && worst < 1.0e-5f && nf == NULL;
         port_log("gfx: vertex flags from %s\n", gPortVfpuOutcodes ? "the VFPU compare (vsync before each read)" : nf != NULL ? "C compares (data/novfpuoc)" : "C compares (the VFPU self-test failed here)");
     }

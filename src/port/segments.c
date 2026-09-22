@@ -197,9 +197,14 @@ void port_log(const char* fmt, ...) {
         static s32 sSync = -1;
         u32 len = (u32) strlen(buf);
         if (sSync < 0) {
-            FILE* f = fopen(port_save_path("logsync"), "rb");
-            sSync = f != NULL;
-            if (f != NULL) fclose(f);
+            sSync = 0;
+#ifdef PORT_DEBUG_KNOBS
+            {
+                FILE* f = fopen(port_save_path("logsync"), "rb");
+                sSync = f != NULL;
+                if (f != NULL) fclose(f);
+            }
+#endif
         }
         if (gPortLogDefer && !sSync) {
             if (sLogRamUsed + len + 1 > sizeof(sLogRam)) {

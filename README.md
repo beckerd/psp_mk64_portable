@@ -2,7 +2,8 @@
 
 # MK64 Portable
 
-A native PSP port of Mario Kart 64 running at full speed (30 FPS), built on the
+A native PSP port of Mario Kart 64 running at full speed -- 60 fps in
+single-player races -- built on the
 [n64decomp/mk64](https://github.com/n64decomp/mk64) decompilation. The game's
 C code runs directly on the PSP's MIPS CPU; the N64-specific layers (libultra,
 the RSP graphics microcode, the RSP audio microcode) are replaced by a port
@@ -19,13 +20,22 @@ not a project for you.
 
 ## Features
 
-- Runs at a locked 30 fps on every PSP model, including the PSP-1000 (32 MB)
-- All cups and courses: Grand Prix and Time Trial
+- 60 fps in single-player races on every PSP model, including the PSP-1000
+  (32 MB); the game simulates exactly what the N64 did and shows a picture after
+  every simulation step.  Heavy stretches drop to 30 fps for a moment rather
+  than run slow.  Menus, split screen and the results screen run at 30 fps.
+- All cups and courses: Grand Prix, Time Trial, VS and Battle
+- Ad hoc multiplayer: two to four PSPs race or battle over ad hoc WLAN, each
+  showing its own player full screen (2P/3P/4P GAME, then HOST or JOIN;
+  see `docs/adhoc.md`).  All PSPs need the same build.
+- The sound is mixed on the PSP's second processor, the Media Engine, which
+  leaves the main CPU to the game
 - True widescreen: the 3D view is rendered with a 16:9 field of view, showing more of the track instead of stretching the 4:3 picture; the HUD and menus keep their proportions, anchored to the screen edges
 - Music, sound effects and the announcer, mixed on the PSP
 - Hardware-accelerated rendering: the N64 display lists are translated to the
   PSP's Graphics Engine, which does the vertex transform and rasterisation
-- Saves (Grand Prix progress, ghosts) kept in the game's `data/` folder
+- Saves (Grand Prix progress, ghosts) kept in the game's `data/` folder, with a
+  backup copy so an interrupted save cannot wipe your progress
 
 ## Installing
 
@@ -39,7 +49,8 @@ own copy of *Mario Kart 64* (USA) as an N64 ROM image (`.z64`, `.n64` or
 
 The first start shows a progress screen while the game data is built from the
 ROM and cached (about 13 MB). Everything the port writes — the cache, the save,
-the log — goes into a `data/` folder next to the EBOOT. Later starts skip the
+the log, and `mk64k.prx`, the small kernel helper that starts the Media Engine —
+goes into a `data/` folder next to the EBOOT. Later starts skip the
 extraction. If the ROM is missing, is another game, or is not the USA version,
 the port says so and returns to the XMB; nothing is cached from a bad ROM.
 
@@ -82,7 +93,7 @@ tools/torch/cmake-build-release/torch header baserom.us.z64
 
 # the PSP build
 export PATH="$HOME/pspdev/bin:$PATH"
-gmake -f Makefile.psp -j8            # -> build/psp/EBOOT.PBP
+gmake -f Makefile.psp -j8            # -> build/psp/EBOOT.PBP (ad hoc play and the Media Engine mixer included)
 gmake -f Makefile.psp release        # clean build + player README -> release/MK64Portable/ and its zip
 ```
 
@@ -95,7 +106,8 @@ Run the result in PPSSPP or on a PSP exactly like a release: put a ROM next to
 | --- | --- |
 | libultra (threads, message queues, DMA, VI/AI/SI, EEPROM) | `src/port/ultra_shim.c` — single-threaded, non-blocking queues; the save is a file |
 | RSP graphics microcode (F3DEX display lists) | `src/port/gfx/gfx_pc.c`, an F3DEX interpreter, driving `src/port/psp/gfx_scegu.c` (sceGu) with the GE doing transform and lighting |
-| RSP audio microcode | `src/port/audio/mixer.c`, a C mixer fed by the game's own `synthesis.c`; `src/port/psp/audio_out.c` resamples to the PSP's 32 kHz output |
+| RSP audio microcode | `src/port/audio/mixer.c`, a C mixer fed by the game's own `synthesis.c`, run as jobs on the Media Engine (`src/port/psp/me.c`, `tools/psp/mekprx`); `src/port/psp/audio_out.c` resamples to the PSP's 32 kHz output |
+| Two VI retraces per game frame | split frames: one picture per simulation tick in 1P races (`docs/fps60.md`) |
 | Segmented addressing | `src/port/segments.c` plus generated offset-to-symbol tables |
 
 ### Shipping without game data

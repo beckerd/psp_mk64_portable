@@ -119,7 +119,33 @@ void port_me_load(void) {
         PORT_LOG("me: emulator detected, mk64k.prx not loaded\n");
         return;
     }
-    snprintf(path, sizeof(path), "%smk64k.prx", port_eboot_dir());
+    /* The helper rides inside the EBOOT (tools/psp/embed_prx.py) and is written
+     * to data/ next to the asset cache; only a kernel module loaded from a file
+     * can boot the ME from user mode.  Rewritten when the bytes differ (a new
+     * build), left alone otherwise. */
+    snprintf(path, sizeof(path), "%smk64k.prx", port_save_dir());
+    {
+        extern const unsigned char gPortMeKprx[];
+        extern const unsigned int gPortMeKprxSize;
+        static unsigned char have[4096];
+        FILE* f = fopen(path, "rb");
+        int same = 0;
+        if (f != NULL) {
+            size_t got = fread(have, 1, sizeof(have), f);
+            fclose(f);
+            same = got == gPortMeKprxSize && gPortMeKprxSize <= sizeof(have) && memcmp(have, gPortMeKprx, gPortMeKprxSize) == 0;
+        }
+        if (!same) {
+            f = fopen(path, "wb");
+            if (f == NULL || fwrite(gPortMeKprx, 1, gPortMeKprxSize, f) != gPortMeKprxSize || fclose(f) != 0) {
+                if (f != NULL) fclose(f);
+                remove(path);
+                PORT_LOG("me: could not write %s: mixing on the CPU\n", path);
+                return;
+            }
+            PORT_LOG("me: wrote %s (%u bytes)\n", path, gPortMeKprxSize);
+        }
+    }
     mod = sceKernelLoadModule(path, 0, NULL);
     if (mod < 0) {
         PORT_LOG("me: %s not loaded (%08X): mixing on the CPU\n", path, (unsigned) mod);

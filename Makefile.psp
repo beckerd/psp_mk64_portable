@@ -106,6 +106,10 @@ DEP_FILES := $(O_FILES:.o=.d)
 # packet so consoles on different builds refuse each other (tools/psp/gen_build_id.py).
 BUILD_ID_C := $(BUILD_DIR)/port_build_id.c
 BUILD_ID_O := $(BUILD_ID_C:.c=.o)
+# The Media Engine kernel helper (tools/psp/mekprx), embedded in the EBOOT and
+# written to data/ at boot: a release is the EBOOT alone.
+MEKPRX_C := $(BUILD_DIR)/port_mekprx.c
+MEKPRX_O := $(MEKPRX_C:.c=.o)
 
 ALL_DIRS := $(BUILD_DIR) $(addprefix $(BUILD_DIR)/,$(GAME_SRC_DIRS) $(PORT_SRC_DIRS) src/os src/os/math $(COURSE_DIRS) \
             $(DATA_DIR) $(DATA_DIR)/karts $(DATA_DIR)/sound_data \
@@ -119,7 +123,12 @@ DUMMY != mkdir -p $(ALL_DIRS)
 # Flags                                                                        #
 #==============================================================================#
 
-DEFINES := PORT_GE_TL=1 PORT_DRAW_DIST=3000 PORT_MAX_VOICES=18 VERSION_US=1 F3DEX_GBI=1 F3D_OLD=1 NON_MATCHING=1 AVOID_UB=1 TARGET_PSP=1 _LANGUAGE_C=1 NO_SEGMENTED_MEMORY=1 \
+# Ad hoc play and the Media Engine mixer are in every build; the ad hoc
+# transport is the PSP's unless a test build asks for the file mailbox
+# (EXTRA_CFLAGS=-DPORT_NET_FILE, two PPSSPP instances).  The data/ debug knobs
+# (docs/fps60.md) only exist with -DPORT_DEBUG_KNOBS.
+NET_TRANSPORT := $(if $(findstring PORT_NET_FILE,$(EXTRA_CFLAGS)),,PORT_NET_ADHOC=1)
+DEFINES := PORT_NET=1 $(NET_TRANSPORT) PORT_ME_AUDIO=1 PORT_GE_TL=1 PORT_DRAW_DIST=3000 PORT_MAX_VOICES=18 VERSION_US=1 F3DEX_GBI=1 F3D_OLD=1 NON_MATCHING=1 AVOID_UB=1 TARGET_PSP=1 _LANGUAGE_C=1 NO_SEGMENTED_MEMORY=1 \
            PSP_LEGACY_TYPES_DEFINED=1 PSP_LEGACY_VOLATILE_TYPES_DEFINED=1
 C_DEFINES := $(foreach d,$(DEFINES),-D$(d))
 
@@ -181,13 +190,16 @@ ASSET_SECTION_PROGBITS = .assetdata : ALIGN(16) { __assets_start = .; *(.assetda
 
 
 default: all
-all: $(EBOOT) $(ASSETS_BIN) $(BUILD_DIR)/mk64k.prx
+all: $(EBOOT) $(ASSETS_BIN)
 
-# mk64k.prx: the kernel-mode helper that boots the Media Engine for
-# -DPORT_ME_AUDIO builds (src/port/psp/me.c); it goes next to the EBOOT.
+# mk64k.prx: the kernel-mode helper that boots the Media Engine (src/port/psp/me.c).
 $(BUILD_DIR)/mk64k.prx: tools/psp/mekprx/mek.c tools/psp/mekprx/me_stub.S tools/psp/mekprx/Makefile src/port/psp/me_share.h
 	$(V)$(MAKE) -C tools/psp/mekprx
 	$(V)cp tools/psp/mekprx/mk64k.prx $@
+$(MEKPRX_C): $(BUILD_DIR)/mk64k.prx tools/psp/embed_prx.py
+	$(V)$(PYTHON) tools/psp/embed_prx.py $< $@
+$(MEKPRX_O): $(MEKPRX_C)
+	$(V)$(CC) -c $(CFLAGS) -o $@ $<
 
 # Slow (minutes): find, for every asset symbol, how it derives from the ROM.
 # Needed only when the set of assets changes.  Keeps its mio0 cache in build/.
@@ -312,14 +324,14 @@ $(BUILD_ID_C): $(filter-out $(ASSET_OBJS),$(O_FILES)) tools/psp/gen_build_id.py
 $(BUILD_ID_O): $(BUILD_ID_C)
 	$(V)$(CC) -c $(CFLAGS) -o $@ $<
 
-$(ELF): $(O_FILES) $(BUILD_ID_O) $(LINK_NOLOAD)
+$(ELF): $(O_FILES) $(BUILD_ID_O) $(MEKPRX_O) $(LINK_NOLOAD)
 	$(call print,Linking:,$@,)
 	$(V)for o in $(ASSET_OBJS); do psp-objcopy --preserve-dates --rename-section .data=.assetdata --rename-section .rodata=.assetrodata $$o; done
-	$(V)$(LD) $(LDFLAGS_BASE) -Wl,-q,-T$(LINK_NOLOAD) -o $@ $(O_FILES) $(BUILD_ID_O) $(LIBS)
+	$(V)$(LD) $(LDFLAGS_BASE) -Wl,-q,-T$(LINK_NOLOAD) -o $@ $(O_FILES) $(BUILD_ID_O) $(MEKPRX_O) $(LIBS)
 	$(V)psp-fixup-imports $@
 
 $(ELF_ASSETS): $(O_FILES) $(LINK_PROGBITS) $(ELF)
-	$(V)$(LD) $(LDFLAGS_BASE) -Wl,-q,-T$(LINK_PROGBITS) -o $@ $(O_FILES) $(BUILD_ID_O) $(LIBS)
+	$(V)$(LD) $(LDFLAGS_BASE) -Wl,-q,-T$(LINK_PROGBITS) -o $@ $(O_FILES) $(BUILD_ID_O) $(MEKPRX_O) $(LIBS)
 
 $(ASSETS_BIN): $(ELF_ASSETS) $(ELF) tools/psp/make_assets.py
 	$(V)python3 tools/psp/make_assets.py $(ELF_ASSETS) $(ELF) -o $@
@@ -357,7 +369,7 @@ release:
 	rm -rf $(RELEASE_DIR)
 	mkdir -p $(RELEASE_DIR)/MK64Portable
 	cp $(EBOOT) $(RELEASE_DIR)/MK64Portable/EBOOT.PBP
-	printf 'MK64 Portable $(RELEASE_VERSION)\n\nAn unofficial fan port for the PSP. It contains no game data: it needs a ROM\nof Mario Kart 64 (USA) that you own. Not affiliated with or endorsed by Nintendo.\n\n1. Copy the MK64Portable folder to ms0:/PSP/GAME/ on your Memory Stick.\n2. Put your Mario Kart 64 (USA) ROM (.z64, .n64 or .v64) in that folder, next to EBOOT.PBP.\n3. Start MK64 Portable from the XMB. The first start reads the ROM and builds the game\n   data (about 13 MB) into a data/ folder; later starts skip this. Your save is kept there too.\n\nControls: steer with the analog nub or the D-pad; Cross = A, Square = B, Circle or L = Z,\nR = hop, Triangle = C-up, Start = pause. Hold Select for 3 seconds to show the FPS counter.\n' > $(RELEASE_DIR)/MK64Portable/README.txt
+	printf 'MK64 Portable $(RELEASE_VERSION)\n\nAn unofficial fan port for the PSP. It contains no game data: it needs a ROM\nof Mario Kart 64 (USA) that you own. Not affiliated with or endorsed by Nintendo.\n\n1. Copy the MK64Portable folder to ms0:/PSP/GAME/ on your Memory Stick.\n2. Put your Mario Kart 64 (USA) ROM (.z64, .n64 or .v64) in that folder, next to EBOOT.PBP.\n3. Start MK64 Portable from the XMB. The first start reads the ROM and builds the game\n   data (about 13 MB) into a data/ folder; later starts skip this. Your save is kept there too.\n\nSingle-player races run at 60 fps; heavy stretches drop to 30 fps for a moment.\nAd hoc multiplayer: WLAN switch on, pick 2P/3P/4P GAME on every PSP, then HOST or JOIN.\nEvery PSP needs this same version of MK64 Portable.\n\nControls: steer with the analog nub or the D-pad; Cross = A, Square = B, Circle or L = Z,\nR = hop, Triangle = C-up, Start = pause. Hold Select for 3 seconds to show the FPS counter.\n' > $(RELEASE_DIR)/MK64Portable/README.txt
 	(cd $(RELEASE_DIR) && (md5 MK64Portable/EBOOT.PBP || md5sum MK64Portable/EBOOT.PBP) > MD5SUMS.txt && rm -f MK64Portable-$(RELEASE_VERSION).zip && zip -q -r MK64Portable-$(RELEASE_VERSION).zip MK64Portable)
 	@ls -lh $(RELEASE_DIR) $(RELEASE_DIR)/MK64Portable
 

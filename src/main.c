@@ -1481,6 +1481,7 @@ extern int gPortNoDirectEmit;  /* gfx_pc.c */
 /* A frame may be split when it is a plain 1P race frame: the 2P-4P loops and
  * the lockstep (one network frame per iteration) keep whole frames. */
 static s32 port_frame_can_split(void) {
+#ifdef PORT_DEBUG_KNOBS
     static s32 sOff = -1;
     if (sOff < 0) { /* test knob: a data/fps30 file keeps whole frames, for A/B runs */
         FILE* f = fopen(port_save_path("fps30"), "rb");
@@ -1491,6 +1492,7 @@ static s32 port_frame_can_split(void) {
     if (sOff) {
         return 0;
     }
+#endif
     if (gGamestate != RACING || gActiveScreenMode != SCREEN_MODE_1P || gIsGamePaused != 0 ||
         gIsInQuitToMenuTransition != 0 || sPortSplitHoldoff > 0) {
         return 0;
@@ -1571,6 +1573,7 @@ static void port_split_stats(void) {
             }
         }
     }
+#ifdef PORT_DEBUG_KNOBS
     {
         /* data/nodirect: batches go through the staging copy again (the switch
          * to pull if direct vertex emit ever misbehaves on some hardware) */
@@ -1582,6 +1585,7 @@ static void port_split_stats(void) {
             gPortNoDirectEmit = sNoDirect;
         }
     }
+#endif
 #ifdef PORT_EXP
     /* Hardware cost breakdown (-DPORT_EXP builds): with an empty data/exp file, a race rotates
      * through eight renderer experiments ONE SECOND at a time and adds each

@@ -335,6 +335,7 @@ int main(UNUSED int argc, char** argv) {
 #ifdef PORT_ME_AUDIO
     { extern void port_me_load(void); port_me_load(); } /* mk64k.prx boots the Media Engine */
 #endif
+#ifdef PORT_DEBUG_KNOBS
     { /* a data/showfps file starts with the FPS counter on (hold SELECT 3 s toggles it as always) */
         extern int gPortShowFps;
         FILE* sf = fopen(port_save_path("showfps"), "rb");
@@ -353,6 +354,7 @@ int main(UNUSED int argc, char** argv) {
             PORT_LOG("cpu: 333 MHz\n");
         }
     }
+#endif
 
     gfx_init(&gfx_psp, &gfx_opengl_api, "MK64 Portable", false);
     port_debug_selftest(); // PORT_GFX_SELFTEST builds only

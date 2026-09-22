@@ -43,7 +43,7 @@ typedef struct {
 #define TAP(f, b) { (f), (f) + 5, (b), 0, 0 }
 
 static const ScriptStep sSteps[] = {
-#if defined(PORT_NET) && defined(PORT_NET_RECOUNT_TEST)
+#if defined(PORT_NET_FILE) && defined(PORT_NET_RECOUNT_TEST)
     /* docs/adhoc.md "Another number of players": in the 2P session the host
      * backs out of the character select to the game select, picks 3P GAME and
      * confirms.  The session must end on both machines in that frame: the host
@@ -61,7 +61,7 @@ static const ScriptStep sSteps[] = {
     TAP(1120, A_BUTTON), // OK: another number of players
     { 640, 1000000, 0, 0, 0 },
 #endif
-#if defined(PORT_NET) && defined(PORT_NET_LEAVE_TEST)
+#if defined(PORT_NET_FILE) && defined(PORT_NET_LEAVE_TEST)
     /* docs/adhoc.md "LEAVE MULTIPLAYER": PORT_NET_LEAVE_TEST=1 the joiner, =2
      * the host pauses the 2P GP race (the START below; the other machine's is
      * masked), goes down to the third line and confirms.  shot1650 is the
@@ -80,8 +80,8 @@ static const ScriptStep sSteps[] = {
     TAP(240, START_BUTTON),  // title screen -> main menu
     // Main menu: 1P -> Mario GP -> 50cc -> OK (defaults; each A advances)
     TAP(400, A_BUTTON),  // leaves the title; the game select appears ~12 frames later
-#ifdef PORT_NET
-    TAP(440, R_JPAD),    // 2P GAME (a lockstep session: one pad per machine)
+#ifdef PORT_NET_FILE
+    TAP(440, R_JPAD),    // 2P GAME (the two-PPSSPP lockstep test: one pad per machine)
 #endif
     TAP(470, A_BUTTON),  // (shot450 shows its top level with the L OPTION / R DATA buttons)
     TAP(520, A_BUTTON),
