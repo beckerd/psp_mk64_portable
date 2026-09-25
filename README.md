@@ -16,3 +16,10 @@ Not releases: builds handed out for testing.
   and put your ROM in it too. Keep `mk64k.prx` beside the EBOOT. `FPS_TEST.txt`
   inside says what to look at and which logs to send back. It only plays ad hoc
   against the same build, not against the ad hoc test build above.
+- `MK64Portable-1.7-test.zip` (2026-09-25): 1.7 test build, everything in 1.6 plus
+  two fixes to try -- EXTRA mode (the mirrored courses after gold in every cup,
+  #20: the course vanished) and the penguins on Sherbet Land (#17: white square
+  eyes, black beaks). Same install as a release: unzip and drag the
+  `MK64Portable` folder into `PSP/GAME/`, or just replace `EBOOT.PBP`; your save
+  is kept and the first start rebuilds the cached game data. EBOOT.PBP MD5
+  `4e13be3cb318362a5ccd1d516805d105`. Ad hoc play needs every PSP on this build.
